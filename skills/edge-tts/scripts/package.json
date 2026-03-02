@@ -1,0 +1,16 @@
+{
+  "name": "edge-tts-scripts",
+  "version": "2.0.0",
+  "description": "Edge-TTS converter and configuration management scripts using node-edge-tts",
+  "type": "commonjs",
+  "scripts": {
+    "tts": "node tts-converter.js",
+    "config": "node config-manager.js",
+    "test": "node tts-converter.js \"Hello, this is a test.\" --output test-output.mp3"
+  },
+  "dependencies": {
+    "node-edge-tts": "^1.2.9",
+    "commander": "^11.0.0"
+  },
+  "license": "MIT"
+}

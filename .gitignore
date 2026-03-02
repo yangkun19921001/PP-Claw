@@ -1,0 +1,38 @@
+# Binary
+nanobot
+go-nanobot
+*.exe
+
+# Go
+vendor/
+
+# Node (edge-tts skill dependencies)
+node_modules/
+package-lock.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment / Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Logs / Temp
+*.log
+*.mp3
+*.wav
+/tmp/
+
+# Test output
+test-output.*
+coverage.out
