@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/yangkun19921001/go-nanobot/agent"
 	"github.com/yangkun19921001/go-nanobot/bus"
+	"github.com/yangkun19921001/go-nanobot/channels"
 	"github.com/yangkun19921001/go-nanobot/config"
 	"github.com/yangkun19921001/go-nanobot/cron"
 	"github.com/yangkun19921001/go-nanobot/providers"
@@ -126,38 +127,60 @@ func runGateway() error {
 	// 创建 Session Manager
 	sessions := session.NewManager(ws)
 
+	// 创建并启动 CronService
+	cronSvc := cron.NewService(ws+"/data/cron/jobs.json", logger)
+	cronSvc.SetOnJob(func(job *cron.CronJob) (string, error) {
+		// 使用原始 channel 和 chatID，确保响应能路由回正确的渠道
+		msgBus.PublishInbound(bus.NewInboundMessage(job.Payload.Channel, "cron", job.Payload.To, job.Payload.Message))
+		return "Job dispatched to agent", nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cronSvc.Start(ctx)
+
 	// 创建 Agent Loop
 	agentLoop, err := agent.NewAgentLoop(&agent.AgentLoopConfig{
-		Bus:       msgBus,
-		Config:    cfg,
-		Workspace: ws,
-		Logger:    logger,
-		Sessions:  sessions,
-		ChatModel: chatModel,
+		Bus:         msgBus,
+		Config:      cfg,
+		Workspace:   ws,
+		Logger:      logger,
+		Sessions:    sessions,
+		ChatModel:   chatModel,
+		CronService: cronSvc,
 	})
 	if err != nil {
 		return fmt.Errorf("创建 Agent Loop 失败: %w", err)
 	}
 
 	// 启动 Agent Loop (协程)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	agentReady := make(chan struct{}, 1)
 	go func() {
+		agentReady <- struct{}{}
 		if err := agentLoop.Run(ctx); err != nil {
 			logger.Error("Agent loop 退出", zap.Error(err))
+		}
+	}()
+	<-agentReady
+
+	// 启动渠道管理器
+	channelMgr := channels.NewManager(cfg, msgBus, logger)
+	go func() {
+		if err := channelMgr.StartAll(ctx); err != nil {
+			logger.Error("渠道启动失败", zap.Error(err))
 		}
 	}()
 
 	// 启动 CLI 渠道 (outbound 消费者)
 	go cliOutboundHandler(ctx, msgBus, logger)
 
+	// 等待启动日志刷出后再显示提示符
+	time.Sleep(50 * time.Millisecond)
+
 	// 信号处理
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// CLI 输入循环 (对标 nanobot 的 CLI 渠道)
-	logger.Info("✨ nanobot ready! Type your message (Ctrl+C to quit)")
 	fmt.Println("\n🐈 nanobot ready! Type your message:")
 	fmt.Print("\n> ")
 
@@ -195,6 +218,8 @@ func runGateway() error {
 
 		case <-sigChan:
 			fmt.Println("\n👋 Shutting down...")
+			cronSvc.Stop()
+			channelMgr.StopAll()
 			agentLoop.Stop()
 			cancel()
 			return nil
@@ -204,26 +229,34 @@ func runGateway() error {
 
 // cliOutboundHandler CLI 出站消息处理
 func cliOutboundHandler(ctx context.Context, msgBus *bus.MessageBus, logger *zap.Logger) {
+	sub, unsub := msgBus.SubscribeOutbound()
+	defer unsub()
+
 	for {
-		msg, err := msgBus.ConsumeOutbound(ctx)
-		if err != nil {
+		select {
+		case msg := <-sub:
+			// 只处理 CLI 渠道的消息
+			if msg.Channel != "cli" {
+				continue
+			}
+
+			// 跳过进度消息
+			if isProgress, ok := msg.Metadata["_progress"].(bool); ok && isProgress {
+				if isToolHint, ok := msg.Metadata["_tool_hint"].(bool); ok && isToolHint {
+					fmt.Printf("  🔧 %s\n", msg.Content)
+				} else if msg.Content != "" {
+					fmt.Printf("  💭 %s\n", msg.Content)
+				}
+				continue
+			}
+
+			if msg.Content != "" {
+				fmt.Printf("\n🤖 %s\n", msg.Content)
+			}
+			fmt.Print("\n> ")
+		case <-ctx.Done():
 			return
 		}
-
-		// 跳过进度消息
-		if isProgress, ok := msg.Metadata["_progress"].(bool); ok && isProgress {
-			if isToolHint, ok := msg.Metadata["_tool_hint"].(bool); ok && isToolHint {
-				fmt.Printf("  🔧 %s\n", msg.Content)
-			} else if msg.Content != "" {
-				fmt.Printf("  💭 %s\n", msg.Content)
-			}
-			continue
-		}
-
-		if msg.Content != "" {
-			fmt.Printf("\n🤖 %s\n", msg.Content)
-		}
-		fmt.Print("\n> ")
 	}
 }
 
@@ -468,11 +501,16 @@ func runAgent(message, sessionID string) error {
 	}
 
 	// 交互模式 (对标 commands.py: agent 无 -m)
+	agentReady := make(chan struct{}, 1)
 	go func() {
+		agentReady <- struct{}{}
 		if err := agentLoop.Run(ctx); err != nil {
 			logger.Error("Agent loop 退出", zap.Error(err))
 		}
 	}()
+	<-agentReady
+	// 等待启动日志刷出
+	time.Sleep(50 * time.Millisecond)
 
 	go cliOutboundHandler(ctx, msgBus, logger)
 

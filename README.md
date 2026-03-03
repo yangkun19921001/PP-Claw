@@ -14,11 +14,11 @@
 |---|---|
 | 🤖 **多 Provider 支持** | OpenAI / Anthropic / DeepSeek / Groq / Gemini / OpenRouter 等 17+ Provider |
 | 💬 **多渠道接入** | Telegram / Discord / Slack / 飞书 / 钉钉 / WhatsApp / Email / QQ / MoChat |
-| 🔧 **工具系统** | 文件操作 / Shell 执行 / Web 搜索+抓取 / 消息发送 / 子代理 / 定时任务 |
+| 🔧 **工具系统** | 文件操作 / Shell 执行 / Web 搜索+抓取 / 消息发送 / 子代理 / 定时任务 / 飞书知识库+文档 |
 | 🔌 **MCP 协议** | 通过 stdio / Streamable HTTP 连接外部 MCP 服务器，自动注册工具 |
 | 🧠 **智能记忆合并** | LLM 驱动的双层记忆系统: MEMORY.md (长期事实) + HISTORY.md (可搜索日志)，自动整合旧消息 |
 | 📦 **技能系统** | 内置 8 个技能 + 支持 workspace 自定义技能，always-load 自动加载 |
-| ⏰ **定时任务** | Cron 表达式 / 固定间隔 / 一次性定时，JSON 持久化，CLI 管理 |
+| ⏰ **定时任务** | Cron 表达式 / 固定间隔 / 一次性定时，默认东八区，JSON 持久化，实时唤醒调度 |
 | 💓 **心跳检查** | 定期检查 HEARTBEAT.md，自动执行待办任务 |
 | 📡 **Progress 流式推送** | 工具调用时实时推送进度提示，CLI 显示 🔧 tool hint |
 | 🚀 **Prompt Caching** | 自动为 Anthropic 注入 prompt caching header，降低延迟和成本 |
@@ -450,6 +450,8 @@ channels:
 
 ### 飞书 / Feishu
 
+使用飞书 SDK WebSocket 长连接模式，自动重连，无需配置公网回调地址。
+
 ```yaml
 channels:
   feishu:
@@ -458,7 +460,11 @@ channels:
     app_secret: "your-app-secret"
     encrypt_key: "your-encrypt-key"           # 可选
     verification_token: "your-token"          # 可选
+    wiki_enabled: true                        # 启用飞书知识库工具
+    docs_enabled: true                        # 启用飞书文档工具
 ```
+
+启用 `wiki_enabled` / `docs_enabled` 后，Agent 可通过工具调用读取飞书知识库空间列表、Wiki 节点和文档内容。
 
 ### 钉钉 / DingTalk
 
@@ -525,17 +531,33 @@ channels:
 
 ## ⏰ 定时任务
 
+### 时区支持
+
+- **默认时区：Asia/Shanghai（北京时间/东八区）**
+- 一次性定时 (`--at`) 和 Cron 表达式在不指定时区时均使用北京时间
+- 可通过 `--tz` 参数指定其他 IANA 时区
+- 通过对话创建的定时任务也默认使用北京时间
+
+### 调度机制
+
+- **实时唤醒**：添加新任务后立即唤醒调度器，无需等待轮询周期
+- **真正的 Cron 解析**：使用 `robfig/cron/v3` 库解析标准 5 字段 Cron 表达式
+- **渠道路由**：定时任务触发后，响应会正确路由回创建时的原始渠道（如飞书、Telegram）
+
 ### 通过 CLI 管理
 
 ```bash
 # 添加定时任务 — 每 60 秒执行一次
 nanobot cron add --name "check-status" --message "检查服务状态" --every 60
 
-# 添加定时任务 — 使用 Cron 表达式 (每天 9:00)
-nanobot cron add --name "daily-report" --message "生成每日报告" --cron "0 9 * * *" --tz "Asia/Shanghai"
+# 添加定时任务 — 使用 Cron 表达式 (每天 9:00 北京时间)
+nanobot cron add --name "daily-report" --message "生成每日报告" --cron "0 9 * * *"
 
-# 添加一次性定时任务
-nanobot cron add --name "reminder" --message "会议提醒" --at "2025-06-01T09:00:00Z"
+# 添加定时任务 — 指定其他时区
+nanobot cron add --name "daily-report" --message "生成每日报告" --cron "0 9 * * *" --tz "America/New_York"
+
+# 添加一次性定时任务（北京时间）
+nanobot cron add --name "reminder" --message "会议提醒" --at "2025-06-01T09:00:00"
 
 # 添加并投递到渠道
 nanobot cron add --name "notify" --message "定期通知" --every 3600 \
@@ -562,16 +584,16 @@ nanobot cron run --id <job-id>
 | `--name` | `-n` | 是 | 任务名称 |
 | `--message` | `-m` | 是 | 发送给 Agent 的消息 |
 | `--every` | `-e` | 三选一 | 固定间隔（秒） |
-| `--cron` | `-C` | 三选一 | Cron 表达式 |
-| `--at` | | 三选一 | 一次性定时（ISO 8601 格式） |
-| `--tz` | | 否 | 时区（仅与 `--cron` 一起使用） |
+| `--cron` | `-C` | 三选一 | Cron 表达式（标准 5 字段） |
+| `--at` | | 三选一 | 一次性定时（ISO 8601 格式，默认北京时间） |
+| `--tz` | | 否 | 时区（默认 Asia/Shanghai） |
 | `--deliver` | `-d` | 否 | 投递结果到渠道 |
 | `--channel` | | 否 | 目标渠道 |
 | `--to` | | 否 | 目标用户/Chat ID |
 
 ### 通过对话创建
 
-也可以在对话中通过自然语言创建定时任务，Agent 会自动调用 cron 工具。
+也可以在对话中通过自然语言创建定时任务，Agent 会自动调用 cron 工具。定时任务触发后，Agent 的回复会自动推送回创建时的渠道。
 
 ---
 
@@ -661,9 +683,11 @@ go-nanobot/
 │       ├── web.go              # Web 搜索 (Brave) + 网页抓取
 │       ├── message.go          # 消息发送工具
 │       ├── spawn.go            # 子代理生成工具
-│       ├── cron.go             # 定时任务工具
+│       ├── cron.go             # 定时任务工具 (默认东八区)
+│       ├── feishu_wiki.go     # 飞书知识库工具
+│       ├── feishu_docs.go     # 飞书文档工具
 │       └── mcp.go              # MCP 客户端 (stdio + Streamable HTTP)
-├── bus/                        # 消息总线
+├── bus/                        # 消息总线 (广播模式，多订阅者)
 ├── channels/                   # 9 个渠道实现
 ├── config/                     # 配置 Schema + YAML 加载
 ├── providers/                  # 17 Provider 注册表 + ChatModel 创建

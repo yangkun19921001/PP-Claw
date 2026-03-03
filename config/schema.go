@@ -179,6 +179,8 @@ type FeishuConfig struct {
 	EncryptKey        string   `yaml:"encrypt_key"`
 	VerificationToken string   `yaml:"verification_token"`
 	AllowFrom         []string `yaml:"allow_from"`
+	WikiEnabled       bool     `yaml:"wiki_enabled"`
+	DocsEnabled       bool     `yaml:"docs_enabled"`
 }
 
 type DingTalkConfig struct {

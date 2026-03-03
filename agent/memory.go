@@ -153,9 +153,11 @@ func (m *MemoryStore) Consolidate(ctx context.Context, sessionMessages []map[str
 	}
 
 	if len(lines) == 0 {
+		m.logger.Warn("记忆整合: 所有消息内容为空，跳过", zap.Int("oldMessages", len(oldMessages)))
 		return lastConsolidated, true
 	}
 
+	m.logger.Debug("记忆整合: 构建对话摘要", zap.Int("lines", len(lines)))
 	currentMemory := m.ReadLongTerm()
 	conversationSummary := strings.Join(lines, "\n")
 
@@ -165,13 +167,25 @@ func (m *MemoryStore) Consolidate(ctx context.Context, sessionMessages []map[str
 		if err != nil {
 			m.logger.Warn("LLM 记忆整合失败，使用 fallback", zap.Error(err))
 			m.fallbackConsolidate(conversationSummary, currentMemory)
+		} else if result.HistoryEntry == "" && result.MemoryUpdate == "" {
+			// LLM 成功但返回空结果，使用 fallback
+			m.logger.Warn("LLM 记忆整合返回空结果，使用 fallback")
+			m.fallbackConsolidate(conversationSummary, currentMemory)
 		} else {
 			if result.HistoryEntry != "" {
-				m.AppendHistory(result.HistoryEntry)
+				if err := m.AppendHistory(result.HistoryEntry); err != nil {
+					m.logger.Error("写入 HISTORY.md 失败", zap.Error(err))
+				}
 			}
 			if result.MemoryUpdate != "" {
-				m.WriteLongTerm(result.MemoryUpdate)
+				if err := m.WriteLongTerm(result.MemoryUpdate); err != nil {
+					m.logger.Error("写入 MEMORY.md 失败", zap.Error(err))
+				}
 			}
+			m.logger.Info("LLM 记忆整合完成",
+				zap.Int("history_len", len(result.HistoryEntry)),
+				zap.Int("memory_len", len(result.MemoryUpdate)),
+			)
 		}
 	} else {
 		m.fallbackConsolidate(conversationSummary, currentMemory)
@@ -243,6 +257,10 @@ func (m *MemoryStore) fallbackConsolidate(conversationSummary, currentMemory str
 			}
 		}
 	}
-	m.AppendHistory(historyEntry)
+	if err := m.AppendHistory(historyEntry); err != nil {
+		m.logger.Error("fallback 写入 HISTORY.md 失败", zap.Error(err), zap.String("path", m.historyFile))
+	} else {
+		m.logger.Info("fallback 记忆整合完成", zap.String("entry", historyEntry))
+	}
 	_ = currentMemory
 }

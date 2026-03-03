@@ -47,7 +47,7 @@ func (t *CronTool) Parameters() map[string]any {
 			},
 			"at": map[string]any{
 				"type":        "string",
-				"description": "ISO datetime for one-time execution (e.g. '2026-02-12T10:30:00')",
+				"description": "ISO datetime for one-time execution, default timezone is Asia/Shanghai (e.g. '2026-02-12T10:30:00')",
 			},
 			"job_id": map[string]any{
 				"type":        "string",
@@ -164,15 +164,36 @@ func (t *CronTool) SetContext(channel, chatID string) {
 	t.chatID = chatID
 }
 
-// parseISOTime 解析 ISO 时间字符串为毫秒时间戳
-func parseISOTime(s string) (int64, error) {
-	layouts := []string{
-		"2006-01-02T15:04:05",
-		"2006-01-02T15:04:05Z07:00",
-		"2006-01-02 15:04:05",
+// 默认时区：Asia/Shanghai (东八区)
+var defaultLocation = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		// fallback: 手动构造东八区
+		loc = time.FixedZone("CST", 8*3600)
 	}
-	for _, layout := range layouts {
-		t, err := time.Parse(layout, s)
+	return loc
+}()
+
+// parseISOTime 解析 ISO 时间字符串为毫秒时间戳（默认使用北京时间）
+func parseISOTime(s string) (int64, error) {
+	// 带时区的格式优先匹配，保留用户指定的时区
+	if t, err := time.Parse("2006-01-02T15:04:05Z07:00", s); err == nil {
+		return t.UnixMilli(), nil
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05Z07:00", s); err == nil {
+		return t.UnixMilli(), nil
+	}
+
+	// 不带时区的格式，使用默认时区（北京时间）
+	localLayouts := []string{
+		"2006-01-02T15:04:05",
+		"2006-01-02T15:04",
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+		"2006-01-02",
+	}
+	for _, layout := range localLayouts {
+		t, err := time.ParseInLocation(layout, s, defaultLocation)
 		if err == nil {
 			return t.UnixMilli(), nil
 		}

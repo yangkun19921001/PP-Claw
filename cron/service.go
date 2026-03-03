@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 
 	"github.com/google/uuid"
@@ -32,12 +33,44 @@ func computeNextRun(schedule CronSchedule, now int64) int64 {
 		}
 		return now + schedule.EveryMs
 	case "cron":
-		// 简化实现: 使用 every 30分钟 作为 cron 近似
-		// 实际生产中应使用 croniter 等库
-		return now + 30*60*1000
+		return cronNextRunMs(schedule.Expr, schedule.Tz, now)
 	}
 	return 0
 }
+
+// cronNextRunMs 解析 cron 表达式并计算下次运行时间（毫秒）
+func cronNextRunMs(expr, tz string, nowMs int64) int64 {
+	// 支持标准 5 字段 cron 表达式
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	sched, err := parser.Parse(expr)
+	if err != nil {
+		return 0
+	}
+
+	// 确定时区
+	loc := defaultCronLocation
+	if tz != "" {
+		if l, err := time.LoadLocation(tz); err == nil {
+			loc = l
+		}
+	}
+
+	nowTime := time.UnixMilli(nowMs).In(loc)
+	next := sched.Next(nowTime)
+	if next.IsZero() {
+		return 0
+	}
+	return next.UnixMilli()
+}
+
+// 默认 cron 时区：Asia/Shanghai (东八区)
+var defaultCronLocation = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	return loc
+}()
 
 // OnJobFunc Job 执行回调
 type OnJobFunc func(job *CronJob) (string, error)
@@ -51,6 +84,7 @@ type Service struct {
 	mu        sync.Mutex
 	logger    *zap.Logger
 	cancel    context.CancelFunc
+	wake      chan struct{} // 唤醒 timerLoop
 }
 
 // NewService 创建 Cron 服务
@@ -61,6 +95,7 @@ func NewService(storePath string, logger *zap.Logger) *Service {
 	return &Service{
 		storePath: storePath,
 		logger:    logger,
+		wake:      make(chan struct{}, 1),
 	}
 }
 
@@ -149,6 +184,14 @@ func (s *Service) getNextWakeMs() int64 {
 	return earliest
 }
 
+// notifyWake 非阻塞地唤醒 timerLoop
+func (s *Service) notifyWake() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
 // timerLoop 定时器循环
 func (s *Service) timerLoop(ctx context.Context) {
 	for {
@@ -157,10 +200,12 @@ func (s *Service) timerLoop(ctx context.Context) {
 		s.mu.Unlock()
 
 		if nextWake == 0 || !s.running {
-			// 没有待运行任务，每30秒检查一次
+			// 没有待运行任务，等待唤醒信号或每30秒检查一次
 			select {
 			case <-ctx.Done():
 				return
+			case <-s.wake:
+				continue
 			case <-time.After(30 * time.Second):
 				continue
 			}
@@ -174,6 +219,9 @@ func (s *Service) timerLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.wake:
+			// 新任务添加，重新计算 delay
+			continue
 		case <-time.After(delay):
 			s.onTimer()
 		}
@@ -277,6 +325,8 @@ func (s *Service) AddJob(name string, schedule CronSchedule, message string, del
 	store.Jobs = append(store.Jobs, job)
 	s.saveStore()
 	s.logger.Info("Cron: 添加任务", zap.String("name", name), zap.String("id", job.ID))
+	// 唤醒 timerLoop 让它重新计算下次触发时间
+	s.notifyWake()
 	return &job
 }
 

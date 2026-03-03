@@ -14,6 +14,7 @@ import (
 	"github.com/yangkun19921001/go-nanobot/agent/tools"
 	"github.com/yangkun19921001/go-nanobot/bus"
 	"github.com/yangkun19921001/go-nanobot/config"
+	"github.com/yangkun19921001/go-nanobot/cron"
 	"github.com/yangkun19921001/go-nanobot/session"
 	"go.uber.org/zap"
 )
@@ -42,16 +43,18 @@ type AgentLoop struct {
 
 	running       bool
 	consolidateMu sync.Mutex // 防止并发合并同一 session
+	cronService   *cron.Service
 }
 
 // AgentLoopConfig 循环配置
 type AgentLoopConfig struct {
-	Bus       *bus.MessageBus
-	Config    *config.Config
-	Workspace string
-	Logger    *zap.Logger
-	Sessions  *session.Manager
-	ChatModel einomodel.ToolCallingChatModel
+	Bus         *bus.MessageBus
+	Config      *config.Config
+	Workspace   string
+	Logger      *zap.Logger
+	Sessions    *session.Manager
+	ChatModel   einomodel.ToolCallingChatModel
+	CronService *cron.Service
 }
 
 // NewAgentLoop 创建 Agent 循环
@@ -79,6 +82,7 @@ func NewAgentLoop(cfg *AgentLoopConfig) (*AgentLoop, error) {
 		memory:        NewMemoryStore(workspace, cfg.ChatModel, logger),
 		mcpManager:    tools.NewMCPManager(logger),
 		chatModel:     cfg.ChatModel,
+		cronService:   cfg.CronService,
 	}
 
 	// 注册默认工具
@@ -138,6 +142,21 @@ func (l *AgentLoop) registerDefaultTools() {
 			return l.subagents.Spawn(ctx, task, label, channel, chatID)
 		},
 	})
+
+	// 定时任务工具
+	if l.cronService != nil {
+		l.tools.Register(&tools.CronTool{
+			CronService: l.cronService,
+		})
+	}
+
+	// 飞书知识库和文档工具
+	if l.cfg.Channels.Feishu.Enabled && (l.cfg.Channels.Feishu.WikiEnabled || l.cfg.Channels.Feishu.DocsEnabled) {
+		feishuTools := tools.CreateFeishuTools(l.cfg.Channels.Feishu.AppID, l.cfg.Channels.Feishu.AppSecret)
+		for _, ft := range feishuTools {
+			l.tools.Register(ft)
+		}
+	}
 }
 
 // initEinoADK 初始化 Eino ADK Runner
@@ -266,6 +285,13 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	// 更新工具上下文
 	l.setToolContext(msg.Channel, msg.ChatID)
 
+	// 开始新的对话回复回合
+	if t := l.tools.Get("message"); t != nil {
+		if mt, ok := t.(*tools.MessageTool); ok {
+			mt.StartTurn()
+		}
+	}
+
 	// 处理斜杠命令
 	cmd := strings.TrimSpace(strings.ToLower(msg.Content))
 	if cmd == "/new" {
@@ -354,6 +380,13 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	unconsolidated := len(sess.Messages) - sess.LastConsolidated
 	if unconsolidated >= l.memoryWindow {
 		go l.consolidateMemory(ctx, sess, false)
+	}
+
+	// 如果 MessageTool 已经在本轮回合中发送过消息，则不再重复发送
+	if t := l.tools.Get("message"); t != nil {
+		if mt, ok := t.(*tools.MessageTool); ok && mt.SentInTurn {
+			return nil, nil
+		}
 	}
 
 	return bus.NewOutboundMessage(msg.Channel, msg.ChatID, finalContent), nil
@@ -482,4 +515,3 @@ func (l *AgentLoop) ProcessDirect(ctx context.Context, content string) (string, 
 	}
 	return resp.Content, nil
 }
-

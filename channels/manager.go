@@ -59,6 +59,7 @@ func (m *Manager) initChannels() {
 			m.logger.Error("初始化渠道失败", zap.String("channel", c.name), zap.Error(err))
 			continue
 		}
+		m.configureChannel(c.name, channel)
 		m.channels[c.name] = channel
 		m.logger.Info("渠道已启用", zap.String("channel", c.name))
 	}
@@ -105,37 +106,44 @@ func (m *Manager) StopAll() {
 // dispatchOutbound 分发出站消息到各渠道 (对标 manager.py:_dispatch_outbound)
 func (m *Manager) dispatchOutbound(ctx context.Context) {
 	m.logger.Info("出站消息分发器启动")
-	for {
-		msg, err := m.bus.ConsumeOutbound(ctx)
-		if err != nil {
-			return
-		}
+	sub, unsub := m.bus.SubscribeOutbound()
+	defer unsub()
 
-		// 跳过进度消息（按配置）
-		if isProgress, ok := msg.Metadata["_progress"].(bool); ok && isProgress {
-			if isToolHint, ok := msg.Metadata["_tool_hint"].(bool); ok && isToolHint {
-				if !m.config.Channels.SendToolHints {
-					continue
-				}
-			} else if !m.config.Channels.SendProgress {
+	for {
+		select {
+		case msg := <-sub:
+			// 跳过 CLI 消息（由 CLI handler 处理）
+			if msg.Channel == "cli" {
 				continue
 			}
-		}
 
-		// 分发到目标渠道
-		m.mu.RLock()
-		ch, ok := m.channels[msg.Channel]
-		m.mu.RUnlock()
-
-		if ok {
-			if err := ch.Send(msg); err != nil {
-				m.logger.Error("发送消息失败",
-					zap.String("channel", msg.Channel),
-					zap.Error(err),
-				)
+			// 跳过进度消息（按配置）
+			if isProgress, ok := msg.Metadata["_progress"].(bool); ok && isProgress {
+				if isToolHint, ok := msg.Metadata["_tool_hint"].(bool); ok && isToolHint {
+					if !m.config.Channels.SendToolHints {
+						continue
+					}
+				} else if !m.config.Channels.SendProgress {
+					continue
+				}
 			}
+
+			// 分发到目标渠道
+			m.mu.RLock()
+			ch, ok := m.channels[msg.Channel]
+			m.mu.RUnlock()
+
+			if ok {
+				if err := ch.Send(msg); err != nil {
+					m.logger.Error("发送消息失败",
+						zap.String("channel", msg.Channel),
+						zap.Error(err),
+					)
+				}
+			}
+		case <-ctx.Done():
+			return
 		}
-		// CLI 消息由 CLI handler 单独处理，不在这里
 	}
 }
 
@@ -155,4 +163,23 @@ func (m *Manager) EnabledChannels() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// configureChannel 根据配置对渠道进行参数注入
+func (m *Manager) configureChannel(name string, ch Channel) {
+	switch name {
+	case "feishu":
+		type feishuConfigurable interface {
+			Configure(appID, appSecret, encryptKey, verificationToken string, allowFrom []string)
+		}
+		if fc, ok := ch.(feishuConfigurable); ok {
+			cfg := m.config.Channels.Feishu
+			fc.Configure(cfg.AppID, cfg.AppSecret, cfg.EncryptKey, cfg.VerificationToken, cfg.AllowFrom)
+		}
+	case "telegram":
+		if tc, ok := ch.(*TelegramChannel); ok {
+			cfg := m.config.Channels.Telegram
+			tc.Configure(cfg.Token, cfg.AllowFrom, cfg.Proxy)
+		}
+	}
 }
