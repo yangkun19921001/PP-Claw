@@ -198,6 +198,14 @@ func runGateway() error {
 		select {
 		case input, ok := <-inputChan:
 			if !ok {
+				// stdin EOF (e.g. Docker non-interactive mode)
+				// 不退出，改为等待信号
+				logger.Info("stdin closed, waiting for signal to shutdown...")
+				<-sigChan
+				fmt.Println("\n👋 Shutting down...")
+				cronSvc.Stop()
+				channelMgr.StopAll()
+				agentLoop.Stop()
 				cancel()
 				return nil
 			}

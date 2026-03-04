@@ -162,25 +162,47 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 			return fmt.Errorf("failed to create stdio client: %w", err)
 		}
 	} else if cfg.URL != "" {
-		// HTTP (Streamable HTTP) 模式 (对标 mcp.py: streamable_http_client)
-		m.logger.Info("MCP connecting via HTTP",
-			zap.String("server", name),
-			zap.String("url", cfg.URL),
-		)
+		// 根据 URL 后缀判断协议: /sse → SSE, 其他 → Streamable HTTP
+		if strings.HasSuffix(cfg.URL, "/sse") {
+			// SSE 模式
+			m.logger.Info("MCP connecting via SSE",
+				zap.String("server", name),
+				zap.String("url", cfg.URL),
+			)
 
-		var opts []transport.StreamableHTTPCOption
-		if len(cfg.Headers) > 0 {
-			opts = append(opts, transport.WithHTTPHeaders(cfg.Headers))
-		}
-		// 不设超时，让工具级别的 timeout 来控制 (与 Python httpx.AsyncClient(timeout=None) 一致)
-		httpTransport, err := transport.NewStreamableHTTP(cfg.URL, opts...)
-		if err != nil {
-			return fmt.Errorf("failed to create HTTP transport: %w", err)
-		}
+			var sseOpts []transport.ClientOption
+			if len(cfg.Headers) > 0 {
+				sseOpts = append(sseOpts, transport.WithHeaders(cfg.Headers))
+			}
+			sseTransport, err := transport.NewSSE(cfg.URL, sseOpts...)
+			if err != nil {
+				return fmt.Errorf("failed to create SSE transport: %w", err)
+			}
 
-		client = mcpclient.NewClient(httpTransport)
-		if err := client.Start(ctx); err != nil {
-			return fmt.Errorf("failed to start HTTP client: %w", err)
+			client = mcpclient.NewClient(sseTransport)
+			if err := client.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start SSE client: %w", err)
+			}
+		} else {
+			// Streamable HTTP 模式 (对标 mcp.py: streamable_http_client)
+			m.logger.Info("MCP connecting via Streamable HTTP",
+				zap.String("server", name),
+				zap.String("url", cfg.URL),
+			)
+
+			var opts []transport.StreamableHTTPCOption
+			if len(cfg.Headers) > 0 {
+				opts = append(opts, transport.WithHTTPHeaders(cfg.Headers))
+			}
+			httpTransport, err := transport.NewStreamableHTTP(cfg.URL, opts...)
+			if err != nil {
+				return fmt.Errorf("failed to create HTTP transport: %w", err)
+			}
+
+			client = mcpclient.NewClient(httpTransport)
+			if err := client.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start HTTP client: %w", err)
+			}
 		}
 	} else {
 		m.logger.Warn("MCP server: no command or url configured, skipping",

@@ -137,9 +137,14 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 				if err := ch.Send(msg); err != nil {
 					m.logger.Error("发送消息失败",
 						zap.String("channel", msg.Channel),
+						zap.String("chat_id", msg.ChatID),
 						zap.Error(err),
 					)
 				}
+			} else {
+				m.logger.Warn("目标渠道未注册，消息丢弃",
+					zap.String("channel", msg.Channel),
+				)
 			}
 		case <-ctx.Done():
 			return

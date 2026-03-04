@@ -1,0 +1,31 @@
+services:
+  gateway:
+    build: .
+    image: go-nanobot:latest
+    container_name: go-nanobot-gateway
+    ports:
+      - "18790:18790"
+    volumes:
+      - ~/.nanobot:/root/.nanobot
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+    command: ["gateway"]
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+
+  cli:
+    image: go-nanobot:latest
+    container_name: go-nanobot-cli
+    volumes:
+      - ~/.nanobot:/root/.nanobot
+    environment:
+      - TZ=Asia/Shanghai
+    command: ["chat"]
+    stdin_open: true
+    tty: true
+    profiles:
+      - cli

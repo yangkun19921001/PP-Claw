@@ -84,6 +84,87 @@ go install github.com/user/go-nanobot@latest
 
 ---
 
+## 🐳 Docker 部署
+
+### 前置条件
+
+- Docker 20.10+
+- Docker Compose V2
+- 已创建配置文件 `~/.nanobot/nanobot.yaml`（参见下方 [配置](#️-配置) 章节）
+
+### 快速启动
+
+```bash
+# 构建镜像
+docker compose build
+
+# 启动 Gateway 服务（后台运行）
+docker compose up -d gateway
+
+# 查看日志
+docker compose logs -f gateway
+
+# 停止服务
+docker compose down
+```
+
+### 交互式 CLI
+
+```bash
+# 启动交互式对话（一次性容器，退出自动删除）
+docker compose run --rm cli
+```
+
+### 配置说明
+
+容器通过挂载 `~/.nanobot` 目录读取配置和持久化数据：
+
+```
+~/.nanobot/
+├── nanobot.yaml          # 主配置文件（必须提前创建）
+├── workspace/            # Agent 工作空间
+│   ├── memory/           # 记忆文件
+│   └── skills/           # 自定义技能
+└── sessions/             # 会话持久化
+```
+
+确保 `nanobot.yaml` 中 Gateway 监听地址为 `0.0.0.0`：
+
+```yaml
+gateway:
+  host: "0.0.0.0"
+  port: 18790
+```
+
+### 服务架构
+
+| 服务 | 说明 | 命令 |
+|---|---|---|
+| `gateway` | 主服务：Agent + 渠道 + 心跳 + 定时任务 | `docker compose up -d gateway` |
+| `cli` | 交互式对话（按需启动） | `docker compose run --rm cli` |
+
+### 常用操作
+
+```bash
+# 重新构建并启动（代码更新后）
+docker compose up -d --build gateway
+
+# 查看容器状态
+docker compose ps
+
+# 进入运行中的容器调试
+docker compose exec gateway sh
+
+# 查看资源使用
+docker stats go-nanobot-gateway
+```
+
+### 自定义构建
+
+如果不需要 Node.js（edge-tts 技能），可以编辑 `Dockerfile` 删除 Node.js 安装步骤以减小镜像体积（约减少 ~200MB）。
+
+---
+
 ## ⚙️ 配置
 
 所有配置统一在 `~/.nanobot/nanobot.yaml`。

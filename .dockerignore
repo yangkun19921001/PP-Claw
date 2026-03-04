@@ -1,0 +1,43 @@
+# Git
+.git
+
+# Binaries
+nanobot
+go-nanobot
+*.exe
+
+# Dependencies
+vendor/
+node_modules/
+
+# Environment / Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Logs / Temp
+*.log
+*.mp3
+*.wav
+/tmp/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs
+docs/
+
+# Claude
+.claude/
+
+# Test output
+test-output.*
+coverage.out

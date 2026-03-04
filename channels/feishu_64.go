@@ -81,6 +81,10 @@ func (f *FeishuChannel) Start(ctx context.Context) error {
 		OnP2ChatAccessEventBotP2pChatEnteredV1(func(ctx context.Context, event *larkim.P2ChatAccessEventBotP2pChatEnteredV1) error {
 			// 忽略 bot 进入私聊事件
 			return nil
+		}).
+		OnP1P2PChatCreatedV1(func(ctx context.Context, event *larkim.P1P2PChatCreatedV1) error {
+			// 忽略 P2P 聊天创建事件
+			return nil
 		})
 
 	// 创建 WebSocket 客户端
@@ -184,9 +188,12 @@ func (f *FeishuChannel) Send(msg *bus.OutboundMessage) error {
 				Build()).
 			Build()
 
-		_, err := f.client.Im.Message.Create(ctx, req)
+		resp, err := f.client.Im.Message.Create(ctx, req)
 		if err != nil {
 			return fmt.Errorf("发送飞书消息失败: %w", err)
+		}
+		if !resp.Success() {
+			return fmt.Errorf("发送飞书消息失败: code=%d msg=%s", resp.Code, resp.Msg)
 		}
 	}
 
