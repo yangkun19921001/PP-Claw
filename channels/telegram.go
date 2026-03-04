@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -101,6 +102,13 @@ func (t *TelegramChannel) Send(msg *bus.OutboundMessage) error {
 		"chat_id":    msg.ChatID,
 		"text":       msg.Content,
 		"parse_mode": "Markdown",
+	}
+
+	// 引用回复: Telegram message_id 是整数
+	if msg.ReplyTo != "" {
+		if replyID, err := strconv.Atoi(msg.ReplyTo); err == nil {
+			payload["reply_to_message_id"] = replyID
+		}
 	}
 
 	data, _ := json.Marshal(payload)

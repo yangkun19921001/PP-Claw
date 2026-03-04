@@ -211,10 +211,12 @@ func (l *AgentLoop) Run(ctx context.Context) error {
 		response, err := l.processMessage(ctx, msg)
 		if err != nil {
 			l.logger.Error("处理消息失败", zap.Error(err))
-			l.bus.PublishOutbound(bus.NewOutboundMessage(
+			errMsg := bus.NewOutboundMessage(
 				msg.Channel, msg.ChatID,
 				fmt.Sprintf("Sorry, I encountered an error: %s", err.Error()),
-			))
+			)
+			errMsg.ReplyTo = extractReplyTo(msg)
+			l.bus.PublishOutbound(errMsg)
 			continue
 		}
 		if response != nil {
@@ -352,8 +354,10 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	einoMsgs = append(einoMsgs, &schema.Message{Role: schema.User, Content: userContentStr})
 
 	// 构建 progress 回调
+	replyTo := extractReplyTo(msg)
 	onProgress := func(content string, toolHint bool) {
 		progressMsg := bus.NewOutboundMessage(msg.Channel, msg.ChatID, content)
+		progressMsg.ReplyTo = replyTo
 		progressMsg.Metadata["_progress"] = true
 		if toolHint {
 			progressMsg.Metadata["_tool_hint"] = true
@@ -389,7 +393,9 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 		}
 	}
 
-	return bus.NewOutboundMessage(msg.Channel, msg.ChatID, finalContent), nil
+	out := bus.NewOutboundMessage(msg.Channel, msg.ChatID, finalContent)
+	out.ReplyTo = extractReplyTo(msg)
+	return out, nil
 }
 
 // consolidateMemory 执行记忆合并（带锁防止并发合并同一 session）
@@ -491,6 +497,20 @@ func (l *AgentLoop) setToolContext(channel, chatID string) {
 			setter.SetContext(channel, chatID)
 		}
 	}
+}
+
+// extractReplyTo 从入站消息的 Metadata 中提取 message_id 作为回复目标
+func extractReplyTo(msg *bus.InboundMessage) string {
+	if msg == nil || msg.Metadata == nil {
+		return ""
+	}
+	if id, ok := msg.Metadata["message_id"]; ok {
+		if s, ok := id.(string); ok {
+			return s
+		}
+		return fmt.Sprintf("%v", id)
+	}
+	return ""
 }
 
 // stripThink 移除 <think>...</think> 块

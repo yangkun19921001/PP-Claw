@@ -179,21 +179,41 @@ func (f *FeishuChannel) Send(msg *bus.OutboundMessage) error {
 		card := f.buildCardElements(msg.Content)
 		content, _ := json.Marshal(card)
 
-		req := larkim.NewCreateMessageReqBuilder().
-			ReceiveIdType(receiveIDType).
-			Body(larkim.NewCreateMessageReqBodyBuilder().
-				ReceiveId(msg.ChatID).
-				MsgType("interactive").
-				Content(string(content)).
-				Build()).
-			Build()
+		if msg.ReplyTo != "" {
+			// 引用回复模式
+			replyReq := larkim.NewReplyMessageReqBuilder().
+				MessageId(msg.ReplyTo).
+				Body(larkim.NewReplyMessageReqBodyBuilder().
+					MsgType("interactive").
+					Content(string(content)).
+					Build()).
+				Build()
 
-		resp, err := f.client.Im.Message.Create(ctx, req)
-		if err != nil {
-			return fmt.Errorf("发送飞书消息失败: %w", err)
-		}
-		if !resp.Success() {
-			return fmt.Errorf("发送飞书消息失败: code=%d msg=%s", resp.Code, resp.Msg)
+			resp, err := f.client.Im.Message.Reply(ctx, replyReq)
+			if err != nil {
+				return fmt.Errorf("回复飞书消息失败: %w", err)
+			}
+			if !resp.Success() {
+				return fmt.Errorf("回复飞书消息失败: code=%d msg=%s", resp.Code, resp.Msg)
+			}
+		} else {
+			// 普通发送模式
+			req := larkim.NewCreateMessageReqBuilder().
+				ReceiveIdType(receiveIDType).
+				Body(larkim.NewCreateMessageReqBodyBuilder().
+					ReceiveId(msg.ChatID).
+					MsgType("interactive").
+					Content(string(content)).
+					Build()).
+				Build()
+
+			resp, err := f.client.Im.Message.Create(ctx, req)
+			if err != nil {
+				return fmt.Errorf("发送飞书消息失败: %w", err)
+			}
+			if !resp.Success() {
+				return fmt.Errorf("发送飞书消息失败: code=%d msg=%s", resp.Code, resp.Msg)
+			}
 		}
 	}
 
