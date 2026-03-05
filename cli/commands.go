@@ -12,13 +12,13 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/yangkun19921001/go-nanobot/agent"
-	"github.com/yangkun19921001/go-nanobot/bus"
-	"github.com/yangkun19921001/go-nanobot/channels"
-	"github.com/yangkun19921001/go-nanobot/config"
-	"github.com/yangkun19921001/go-nanobot/cron"
-	"github.com/yangkun19921001/go-nanobot/providers"
-	"github.com/yangkun19921001/go-nanobot/session"
+	"github.com/yangkun19921001/PP-Claw/agent"
+	"github.com/yangkun19921001/PP-Claw/bus"
+	"github.com/yangkun19921001/PP-Claw/channels"
+	"github.com/yangkun19921001/PP-Claw/config"
+	"github.com/yangkun19921001/PP-Claw/cron"
+	"github.com/yangkun19921001/PP-Claw/providers"
+	"github.com/yangkun19921001/PP-Claw/session"
 	"go.uber.org/zap"
 )
 

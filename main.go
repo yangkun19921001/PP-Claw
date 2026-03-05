@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/yangkun19921001/go-nanobot/cli"
+	"github.com/yangkun19921001/PP-Claw/cli"
 )
 
 func main() {

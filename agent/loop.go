@@ -11,11 +11,11 @@ import (
 	"github.com/cloudwego/eino/adk"
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	"github.com/yangkun19921001/go-nanobot/agent/tools"
-	"github.com/yangkun19921001/go-nanobot/bus"
-	"github.com/yangkun19921001/go-nanobot/config"
-	"github.com/yangkun19921001/go-nanobot/cron"
-	"github.com/yangkun19921001/go-nanobot/session"
+	"github.com/yangkun19921001/PP-Claw/agent/tools"
+	"github.com/yangkun19921001/PP-Claw/bus"
+	"github.com/yangkun19921001/PP-Claw/config"
+	"github.com/yangkun19921001/PP-Claw/cron"
+	"github.com/yangkun19921001/PP-Claw/session"
 	"go.uber.org/zap"
 )
 

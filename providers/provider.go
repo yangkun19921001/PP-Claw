@@ -7,7 +7,7 @@ import (
 
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
-	"github.com/yangkun19921001/go-nanobot/config"
+	"github.com/yangkun19921001/PP-Claw/config"
 	"go.uber.org/zap"
 )
 

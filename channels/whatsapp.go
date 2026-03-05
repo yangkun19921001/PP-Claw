@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yangkun19921001/go-nanobot/bus"
+	"github.com/yangkun19921001/PP-Claw/bus"
 	"go.uber.org/zap"
 )
 

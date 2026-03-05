@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/yangkun19921001/go-nanobot/cron"
+	"github.com/yangkun19921001/PP-Claw/cron"
 )
 
 // CronTool 定时任务工具 (对标 agent/tools/cron.py:CronTool)

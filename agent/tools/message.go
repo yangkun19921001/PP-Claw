@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/yangkun19921001/go-nanobot/bus"
+	"github.com/yangkun19921001/PP-Claw/bus"
 )
 
 // MessageTool 消息发送工具 (对标 nanobot/agent/tools/message.py:MessageTool)

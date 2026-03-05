@@ -1048,6 +1048,6 @@ go-nanobot 展示了一个有趣的工程实践：**将一个精心设计的 Pyt
 ---
 
 *本文基于 go-nanobot 和 nanobot 的源码分析撰写，代码仓库：*
-- *go-nanobot: https://github.com/yangkun19921001/go-nanobot*
+- *go-nanobot: https://github.com/yangkun19921001/PP-Claw*
 - *nanobot: https://github.com/HKUDS/nanobot*
 - *OpenClaw: https://github.com/openclaw/openclaw*

@@ -16,7 +16,7 @@ import (
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	"github.com/larksuite/oapi-sdk-go/v3/ws"
-	"github.com/yangkun19921001/go-nanobot/bus"
+	"github.com/yangkun19921001/PP-Claw/bus"
 	"go.uber.org/zap"
 )
 

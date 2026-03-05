@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/yangkun19921001/go-nanobot/agent/tools"
-	"github.com/yangkun19921001/go-nanobot/bus"
+	"github.com/yangkun19921001/PP-Claw/agent/tools"
+	"github.com/yangkun19921001/PP-Claw/bus"
 	"go.uber.org/zap"
 )
 
