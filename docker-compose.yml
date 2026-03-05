@@ -1,12 +1,12 @@
 services:
   gateway:
     build: .
-    image: go-nanobot:latest
-    container_name: go-nanobot-gateway
+    image: pp-claw:latest
+    container_name: pp-claw-gateway
     ports:
       - "18790:18790"
     volumes:
-      - ~/.nanobot:/root/.nanobot
+      - ~/.pp-claw:/root/.pp-claw
     environment:
       - TZ=Asia/Shanghai
     restart: unless-stopped
@@ -18,10 +18,10 @@ services:
           memory: 1G
 
   cli:
-    image: go-nanobot:latest
-    container_name: go-nanobot-cli
+    image: pp-claw:latest
+    container_name: pp-claw-cli
     volumes:
-      - ~/.nanobot:/root/.nanobot
+      - ~/.pp-claw:/root/.pp-claw
     environment:
       - TZ=Asia/Shanghai
     command: ["chat"]

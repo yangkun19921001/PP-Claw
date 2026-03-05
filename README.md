@@ -1,10 +1,10 @@
-# 🐈 go-nanobot
+# 🐈 PP-Claw
 
-**go-nanobot** 是 [nanobot](https://github.com/HKUDS/nanobot) Python 项目的 Go 语言 1:1 复刻版，一个简洁、透明、高效的个人 AI 助手 Agent。
+**PP-Claw** 是 [nanobot](https://github.com/HKUDS/nanobot) Python 项目的 Go 语言 1:1 复刻版，一个简洁、透明、高效的个人 AI 助手 Agent。
 
 基于 [Eino ADK](https://github.com/cloudwego/eino) 构建，支持多 LLM Provider、多渠道接入、MCP 工具扩展、定时任务、长期记忆和技能系统。
 
-**go-nanobot** is a Go 1:1 port of [nanobot](https://github.com/HKUDS/nanobot) — a simple, transparent, and efficient personal AI assistant agent. Built on [Eino ADK](https://github.com/cloudwego/eino), it supports 17+ LLM providers, 9 chat channels, MCP tool extensions, cron jobs, long-term memory, and a skills system.
+
 
 ---
 
@@ -15,7 +15,7 @@
 | 🤖 **多 Provider 支持** | OpenAI / Anthropic / DeepSeek / Groq / Gemini / OpenRouter 等 17+ Provider |
 | 💬 **多渠道接入** | Telegram / Discord / Slack / 飞书 / 钉钉 / WhatsApp / Email / QQ / MoChat |
 | 🔧 **工具系统** | 文件操作 / Shell 执行 / Web 搜索+抓取 / 消息发送 / 子代理 / 定时任务 / 飞书知识库+文档 |
-| 🔌 **MCP 协议** | 通过 stdio / Streamable HTTP 连接外部 MCP 服务器，自动注册工具 |
+| 🔌 **MCP 协议** | 通过 stdio / SSE / Streamable HTTP 连接外部 MCP 服务器，自动注册工具 |
 | 🧠 **智能记忆合并** | LLM 驱动的双层记忆系统: MEMORY.md (长期事实) + HISTORY.md (可搜索日志)，自动整合旧消息 |
 | 📦 **技能系统** | 内置 8 个技能 + 支持 workspace 自定义技能，always-load 自动加载 |
 | ⏰ **定时任务** | Cron 表达式 / 固定间隔 / 一次性定时，默认东八区，JSON 持久化，实时唤醒调度 |
@@ -36,37 +36,37 @@
 ### 编译安装
 
 ```bash
-git clone https://github.com/user/go-nanobot.git
-cd go-nanobot
+git clone https://github.com/yangkun19921001/PP-Claw.git
+cd PP-Claw
 go mod tidy
-go build -o nanobot .
+go build -o pp-claw .
 ```
 
 或直接安装：
 
 ```bash
-go install github.com/user/go-nanobot@latest
+go install github.com/yangkun19921001/PP-Claw@latest
 ```
 
 ### 初始化配置
 
 ```bash
-./nanobot onboard
+./pp-claw onboard
 ```
 
-按照提示输入 API Key 和模型名称。配置文件将创建在 `~/.nanobot/nanobot.yaml`。
+按照提示输入 API Key 和模型名称。配置文件将创建在 `~/.pp-claw/pp-claw.yaml`。
 
 ### 首次对话
 
 ```bash
 # 单次对话
-./nanobot agent -m "你好，请介绍一下你自己"
+./pp-claw agent -m "你好，请介绍一下你自己"
 
 # 交互模式
-./nanobot agent
+./pp-claw agent
 
 # 启动 Gateway（完整服务：Agent + 渠道 + 心跳 + 定时任务）
-./nanobot gateway
+./pp-claw gateway
 ```
 
 交互模式下支持 `/new`（新会话）、`/help`（帮助）、`exit`（退出）。
@@ -90,7 +90,7 @@ go install github.com/user/go-nanobot@latest
 
 - Docker 20.10+
 - Docker Compose V2
-- 已创建配置文件 `~/.nanobot/nanobot.yaml`（参见下方 [配置](#️-配置) 章节）
+- 已创建配置文件 `~/.pp-claw/pp-claw.yaml`（参见下方 [配置](#️-配置) 章节）
 
 ### 快速启动
 
@@ -117,18 +117,18 @@ docker compose run --rm cli
 
 ### 配置说明
 
-容器通过挂载 `~/.nanobot` 目录读取配置和持久化数据：
+容器通过挂载 `~/.pp-claw` 目录读取配置和持久化数据：
 
 ```
-~/.nanobot/
-├── nanobot.yaml          # 主配置文件（必须提前创建）
+~/.pp-claw/
+├── pp-claw.yaml          # 主配置文件（必须提前创建）
 ├── workspace/            # Agent 工作空间
 │   ├── memory/           # 记忆文件
 │   └── skills/           # 自定义技能
 └── sessions/             # 会话持久化
 ```
 
-确保 `nanobot.yaml` 中 Gateway 监听地址为 `0.0.0.0`：
+确保 `pp-claw.yaml` 中 Gateway 监听地址为 `0.0.0.0`：
 
 ```yaml
 gateway:
@@ -156,7 +156,7 @@ docker compose ps
 docker compose exec gateway sh
 
 # 查看资源使用
-docker stats go-nanobot-gateway
+docker stats PP-Claw-gateway
 ```
 
 ### 自定义构建
@@ -167,16 +167,16 @@ docker stats go-nanobot-gateway
 
 ## ⚙️ 配置
 
-所有配置统一在 `~/.nanobot/nanobot.yaml`。
+所有配置统一在 `~/.pp-claw/pp-claw.yaml`。
 
 ### 完整配置模板
 
 ```yaml
-# ~/.nanobot/nanobot.yaml
+# ~/.pp-claw/pp-claw.yaml
 
 agents:
   defaults:
-    workspace: "~/.nanobot/workspace"
+    workspace: "~/.pp-claw/workspace"
     model: "deepseek-chat"               # 模型名，原样传给 API
     max_tokens: 8192
     temperature: 0.1
@@ -381,7 +381,7 @@ MCP（Model Context Protocol）允许 Agent 调用外部工具。支持两种传
 
 ### stdio 模式
 
-适用于本地命令行程序。nanobot 启动子进程，通过 stdin/stdout 通信。
+适用于本地命令行程序。pp-claw 启动子进程，通过 stdin/stdout 通信。
 
 ```yaml
 tools:
@@ -586,7 +586,7 @@ channels:
     poll_interval_seconds: 60
     mark_seen: true
     max_body_chars: 10000
-    subject_prefix: "[nanobot] "
+    subject_prefix: "[pp-claw] "
 ```
 
 ### QQ
@@ -629,33 +629,33 @@ channels:
 
 ```bash
 # 添加定时任务 — 每 60 秒执行一次
-nanobot cron add --name "check-status" --message "检查服务状态" --every 60
+pp-claw cron add --name "check-status" --message "检查服务状态" --every 60
 
 # 添加定时任务 — 使用 Cron 表达式 (每天 9:00 北京时间)
-nanobot cron add --name "daily-report" --message "生成每日报告" --cron "0 9 * * *"
+pp-claw cron add --name "daily-report" --message "生成每日报告" --cron "0 9 * * *"
 
 # 添加定时任务 — 指定其他时区
-nanobot cron add --name "daily-report" --message "生成每日报告" --cron "0 9 * * *" --tz "America/New_York"
+pp-claw cron add --name "daily-report" --message "生成每日报告" --cron "0 9 * * *" --tz "America/New_York"
 
 # 添加一次性定时任务（北京时间）
-nanobot cron add --name "reminder" --message "会议提醒" --at "2025-06-01T09:00:00"
+pp-claw cron add --name "reminder" --message "会议提醒" --at "2025-06-01T09:00:00"
 
 # 添加并投递到渠道
-nanobot cron add --name "notify" --message "定期通知" --every 3600 \
+pp-claw cron add --name "notify" --message "定期通知" --every 3600 \
   --deliver --channel telegram --to "123456"
 
 # 查看所有定时任务
-nanobot cron list
+pp-claw cron list
 
 # 启用/禁用任务
-nanobot cron enable <job-id>
-nanobot cron enable <job-id> --disable
+pp-claw cron enable <job-id>
+pp-claw cron enable <job-id> --disable
 
 # 删除任务
-nanobot cron remove --id <job-id>
+pp-claw cron remove --id <job-id>
 
 # 手动运行
-nanobot cron run --id <job-id>
+pp-claw cron run --id <job-id>
 ```
 
 `cron add` 参数说明：
@@ -683,7 +683,7 @@ nanobot cron run --id <job-id>
 在 workspace 的 `skills/` 目录下创建技能：
 
 ```
-~/.nanobot/workspace/skills/
+~/.pp-claw/workspace/skills/
 └── my-skill/
     └── SKILL.md
 ```
@@ -712,8 +712,8 @@ Detailed instructions for the agent...
 
 Agent 自动管理双层记忆：
 
-- `~/.nanobot/workspace/memory/MEMORY.md` — 长期事实记忆
-- `~/.nanobot/workspace/memory/HISTORY.md` — 事件日志（可用 grep 搜索）
+- `~/.pp-claw/workspace/memory/MEMORY.md` — 长期事实记忆
+- `~/.pp-claw/workspace/memory/HISTORY.md` — 事件日志（可用 grep 搜索）
 
 对话消息数超过 `memory_window` 时自动触发 LLM 驱动的记忆合并：
 
@@ -729,26 +729,26 @@ Agent 自动管理双层记忆：
 
 | 命令 | 说明 |
 |---|---|
-| `nanobot onboard` | 交互式初始化配置 |
-| `nanobot gateway` | 启动完整 Gateway 服务 |
-| `nanobot agent` | 交互模式 |
-| `nanobot agent -m "..."` | 单次对话 |
-| `nanobot status` | 查看运行状态 |
-| `nanobot channels status` | 查看渠道状态 |
-| `nanobot cron list` | 列出定时任务 |
-| `nanobot cron add` | 添加定时任务 |
-| `nanobot cron enable <id>` | 启用任务 |
-| `nanobot cron enable <id> --disable` | 禁用任务 |
-| `nanobot cron remove --id <id>` | 删除任务 |
-| `nanobot cron run --id <id>` | 手动运行任务 |
-| `nanobot version` | 显示版本号 |
+| `pp-claw onboard` | 交互式初始化配置 |
+| `pp-claw gateway` | 启动完整 Gateway 服务 |
+| `pp-claw agent` | 交互模式 |
+| `pp-claw agent -m "..."` | 单次对话 |
+| `pp-claw status` | 查看运行状态 |
+| `pp-claw channels status` | 查看渠道状态 |
+| `pp-claw cron list` | 列出定时任务 |
+| `pp-claw cron add` | 添加定时任务 |
+| `pp-claw cron enable <id>` | 启用任务 |
+| `pp-claw cron enable <id> --disable` | 禁用任务 |
+| `pp-claw cron remove --id <id>` | 删除任务 |
+| `pp-claw cron run --id <id>` | 手动运行任务 |
+| `pp-claw version` | 显示版本号 |
 
 ---
 
 ## 📁 项目结构
 
 ```
-go-nanobot/
+PP-Claw/
 ├── main.go                     # 入口
 ├── cli/commands.go             # CLI 命令
 ├── agent/
@@ -787,9 +787,9 @@ go-nanobot/
 - **[Cobra](https://github.com/spf13/cobra)** — CLI 框架
 - **[Zap](https://go.uber.org/zap)** — 结构化日志
 
-## 📊 与 Python nanobot 对比
+## 📊 与 Python pp-claw 对比
 
-| 指标 | Python nanobot | Go nanobot |
+| 指标 | Python pp-claw | Go pp-claw |
 |---|---|---|
 | 文件数 | 42 .py | 37 .go |
 | 代码行数 | ~13,000 | ~6,700 |

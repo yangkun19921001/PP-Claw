@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// ContextBuilder 构建 Agent 上下文 (对标 nanobot/agent/context.py:ContextBuilder)
+// ContextBuilder 构建 Agent 上下文 (对标 pp-claw/agent/context.py:ContextBuilder)
 type ContextBuilder struct {
 	Workspace string
 }
@@ -21,7 +21,7 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 	return &ContextBuilder{Workspace: workspace}
 }
 
-// BootstrapFiles 引导文件列表 (与 nanobot 相同)
+// BootstrapFiles 引导文件列表 (与 pp-claw 相同)
 var BootstrapFiles = []string{"AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"}
 
 // BuildSystemPrompt 构建系统提示词 (对标 context.py:build_system_prompt)
@@ -75,9 +75,9 @@ func (c *ContextBuilder) getIdentity() string {
 		osName = "macOS"
 	}
 
-	return fmt.Sprintf(`# nanobot 🐈
+	return fmt.Sprintf(`# pp-claw 🦞
 
-You are nanobot, a helpful AI assistant. 
+You are pp-claw, a helpful AI assistant. 
 
 ## Runtime
 %s %s, Go %s

@@ -2,7 +2,7 @@ package config
 
 import "path/filepath"
 
-// Config 根配置 (对标 nanobot/config/schema.py:Config)
+// Config 根配置 (对标 pp-claw/config/schema.py:Config)
 type Config struct {
 	Agents    AgentsConfig    `yaml:"agents"`
 	Channels  ChannelsConfig  `yaml:"channels"`
@@ -228,7 +228,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
-				Workspace:         "~/.nanobot/workspace",
+				Workspace:         "~/.pp-claw/workspace",
 				Model:             "anthropic/claude-opus-4-5",
 				MaxTokens:         8192,
 				Temperature:       0.1,

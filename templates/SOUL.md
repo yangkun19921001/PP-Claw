@@ -1,6 +1,6 @@
 # Soul
 
-I am nanobot 🐈, a personal AI assistant.
+I am pp-claw 🦞, a personal AI assistant.
 
 ## Personality
 

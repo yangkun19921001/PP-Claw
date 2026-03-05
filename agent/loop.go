@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// AgentLoop Agent 循环 (对标 nanobot/agent/loop.py:AgentLoop)
+// AgentLoop Agent 循环 (对标 pp-claw/agent/loop.py:AgentLoop)
 type AgentLoop struct {
 	bus           *bus.MessageBus
 	cfg           *config.Config
@@ -169,7 +169,7 @@ func (l *AgentLoop) initEinoADK(ctx context.Context) error {
 
 	// 创建 ChatModelAgent
 	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
-		Name:          "nanobot",
+		Name:          "pp-claw",
 		Description:   "A helpful AI assistant",
 		Model:         l.chatModel,
 		ToolsConfig:   toolsConfig,
@@ -309,7 +309,7 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	}
 	if cmd == "/help" {
 		return bus.NewOutboundMessage(msg.Channel, msg.ChatID,
-			"🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands"), nil
+			"🦞 pp-claw commands:\n/new — Start a new conversation\n/help — Show available commands"), nil
 	}
 
 	// 获取/创建 Session

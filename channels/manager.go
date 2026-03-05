@@ -9,7 +9,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Manager 渠道管理器 (对标 nanobot/channels/manager.py:ChannelManager)
+// Manager 渠道管理器 (对标 pp-claw/channels/manager.py:ChannelManager)
 type Manager struct {
 	config   *config.Config
 	bus      *bus.MessageBus

@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// SkillsLoader 技能加载器 (对标 nanobot/agent/skills.py:SkillsLoader)
+// SkillsLoader 技能加载器 (对标 pp-claw/agent/skills.py:SkillsLoader)
 type SkillsLoader struct {
 	workspace       string
 	workspaceSkills string
@@ -197,7 +197,7 @@ func (l *SkillsLoader) getSkillMetadata(name string) map[string]string {
 	return metadata
 }
 
-// getSkillMeta 获取 nanobot 元数据
+// getSkillMeta 获取 pp-claw 元数据
 func (l *SkillsLoader) getSkillMeta(name string) map[string]string {
 	return l.getSkillMetadata(name)
 }

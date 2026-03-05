@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// MemoryStore 双层记忆系统 (对标 nanobot/agent/memory.py:MemoryStore)
+// MemoryStore 双层记忆系统 (对标 pp-claw/agent/memory.py:MemoryStore)
 // - MEMORY.md: 长期事实记忆
 // - HISTORY.md: 事件日志 (grep 可搜索)
 type MemoryStore struct {

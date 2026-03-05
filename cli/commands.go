@@ -27,15 +27,15 @@ var (
 	workspace string
 )
 
-// NewRootCmd 创建根命令 (对标 nanobot/cli/commands.py)
+// NewRootCmd 创建根命令 (对标 pp-claw/cli/commands.py)
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "nanobot",
-		Short: "🐈 nanobot - A helpful AI assistant",
-		Long:  "nanobot is a simple, transparent, and efficient AI assistant agent.",
+		Use:   "pp-claw",
+		Short: "🦞 pp-claw - A helpful AI assistant",
+		Long:  "pp-claw is a simple, transparent, and efficient AI assistant agent.",
 	}
 
-	root.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file path (default: ~/.nanobot/nanobot.yaml)")
+	root.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file path (default: ~/.pp-claw/pp-claw.yaml)")
 	root.PersistentFlags().StringVarP(&workspace, "workspace", "w", "", "workspace directory")
 
 	root.AddCommand(newGatewayCmd())
@@ -53,7 +53,7 @@ func NewRootCmd() *cobra.Command {
 func newGatewayCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "gateway",
-		Short: "Start the nanobot gateway",
+		Short: "Start the pp-claw gateway",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runGateway()
 		},
@@ -64,9 +64,9 @@ func newGatewayCmd() *cobra.Command {
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Show nanobot version",
+		Short: "Show pp-claw version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("🐈 go-nanobot v0.1.0")
+			fmt.Println("🦞 pp-claw v0.1.0")
 		},
 	}
 }
@@ -75,26 +75,26 @@ func newVersionCmd() *cobra.Command {
 func newOnboardCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "onboard",
-		Short: "Initialize nanobot configuration",
+		Short: "Initialize pp-claw configuration",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runOnboard()
 		},
 	}
 }
 
-// runGateway 启动 Gateway (对标 nanobot/cli/commands.py gateway 命令)
+// runGateway 启动 Gateway (对标 pp-claw/cli/commands.py gateway 命令)
 func runGateway() error {
 	// 初始化 Logger
 	logger, _ := zap.NewDevelopment()
 	defer logger.Sync()
 
-	logger.Info("🐈 go-nanobot starting...")
+	logger.Info("🦞 pp-claw starting...")
 
 	// 加载配置
 	cfgPath := cfgFile
 	if cfgPath == "" {
 		home, _ := os.UserHomeDir()
-		cfgPath = home + "/.nanobot/nanobot.yaml"
+		cfgPath = home + "/.pp-claw/pp-claw.yaml"
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -180,8 +180,8 @@ func runGateway() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// CLI 输入循环 (对标 nanobot 的 CLI 渠道)
-	fmt.Println("\n🐈 nanobot ready! Type your message:")
+	// CLI 输入循环 (对标 pp-claw 的 CLI 渠道)
+	fmt.Println("\n🦞 pp-claw ready! Type your message:")
 	fmt.Print("\n> ")
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -295,8 +295,8 @@ var onboardProviders = []struct {
 // runOnboard 交互式初始化
 func runOnboard() error {
 	home, _ := os.UserHomeDir()
-	cfgDir := home + "/.nanobot"
-	cfgPath := cfgDir + "/nanobot.yaml"
+	cfgDir := home + "/.pp-claw"
+	cfgPath := cfgDir + "/pp-claw.yaml"
 
 	// 检查是否已存在
 	if _, err := os.Stat(cfgPath); err == nil {
@@ -308,7 +308,7 @@ func runOnboard() error {
 
 	reader := bufio.NewReader(os.Stdin)
 
-	fmt.Println("🐈 Welcome to nanobot!")
+	fmt.Println("🦞 Welcome to pp-claw!")
 	fmt.Println("Let's set up your configuration.")
 	fmt.Println()
 
@@ -356,7 +356,7 @@ func runOnboard() error {
 	apiKey, _ := reader.ReadString('\n')
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
-		fmt.Println("  (skipped — you can set it later in ~/.nanobot/nanobot.yaml)")
+		fmt.Println("  (skipped — you can set it later in ~/.pp-claw/pp-claw.yaml)")
 	}
 
 	// ── Step 3: Base URL ──
@@ -425,11 +425,11 @@ func runOnboard() error {
 	fmt.Printf("  Workspace:  %s\n", ws)
 	fmt.Println()
 	fmt.Println("Next steps:")
-	fmt.Println("  nanobot agent -m \"Hello!\"    # Quick test")
-	fmt.Println("  nanobot agent               # Interactive chat")
-	fmt.Println("  nanobot gateway             # Full service")
+	fmt.Println("  pp-claw agent -m \"Hello!\"    # Quick test")
+	fmt.Println("  pp-claw agent               # Interactive chat")
+	fmt.Println("  pp-claw gateway             # Full service")
 	fmt.Println()
-	fmt.Println("Edit ~/.nanobot/nanobot.yaml to add channels, MCP servers, etc.")
+	fmt.Println("Edit ~/.pp-claw/pp-claw.yaml to add channels, MCP servers, etc.")
 
 	return nil
 }
@@ -464,7 +464,7 @@ func runAgent(message, sessionID string) error {
 	cfgPath := cfgFile
 	if cfgPath == "" {
 		home, _ := os.UserHomeDir()
-		cfgPath = home + "/.nanobot/nanobot.yaml"
+		cfgPath = home + "/.pp-claw/pp-claw.yaml"
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -522,7 +522,7 @@ func runAgent(message, sessionID string) error {
 
 	go cliOutboundHandler(ctx, msgBus, logger)
 
-	fmt.Println("\n\xf0\x9f\x90\x88 nanobot interactive mode. Type 'exit' to quit.")
+	fmt.Println("\n\xf0\x9f\xa6\x9e pp-claw interactive mode. Type 'exit' to quit.")
 	fmt.Print("\nYou: ")
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -567,7 +567,7 @@ func showChannelStatus() error {
 	cfgPath := cfgFile
 	if cfgPath == "" {
 		home, _ := os.UserHomeDir()
-		cfgPath = home + "/.nanobot/nanobot.yaml"
+		cfgPath = home + "/.pp-claw/pp-claw.yaml"
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -684,7 +684,7 @@ func newCronCmd() *cobra.Command {
 
 func getCronService() *cron.Service {
 	home, _ := os.UserHomeDir()
-	storePath := home + "/.nanobot/data/cron/jobs.json"
+	storePath := home + "/.pp-claw/data/cron/jobs.json"
 	return cron.NewService(storePath, nil)
 }
 
@@ -860,7 +860,7 @@ func cronRun(jobID string) error {
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show nanobot status",
+		Short: "Show pp-claw status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return showStatus()
 		},
@@ -871,7 +871,7 @@ func showStatus() error {
 	cfgPath := cfgFile
 	if cfgPath == "" {
 		home, _ := os.UserHomeDir()
-		cfgPath = home + "/.nanobot/nanobot.yaml"
+		cfgPath = home + "/.pp-claw/pp-claw.yaml"
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -880,7 +880,7 @@ func showStatus() error {
 
 	ws := config.ExpandHome(cfg.Agents.Defaults.Workspace)
 
-	fmt.Println("ð\x9f\x90\x88 nanobot status")
+	fmt.Println("\xf0\x9f\xa6\x9e pp-claw status")
 	fmt.Println()
 	fmt.Printf("  Version:    v0.1.0\n")
 	fmt.Printf("  Model:      %s\n", cfg.Agents.Defaults.Model)

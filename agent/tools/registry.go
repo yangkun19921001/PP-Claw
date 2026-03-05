@@ -10,7 +10,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-// Tool 工具接口 (对标 nanobot/agent/tools/base.py:Tool)
+// Tool 工具接口 (对标 pp-claw/agent/tools/base.py:Tool)
 type Tool interface {
 	Name() string
 	Description() string
@@ -23,7 +23,7 @@ type ContextSetter interface {
 	SetContext(channel, chatID string)
 }
 
-// Registry 工具注册表 (对标 nanobot/agent/tools/registry.py:ToolRegistry)
+// Registry 工具注册表 (对标 pp-claw/agent/tools/registry.py:ToolRegistry)
 type Registry struct {
 	tools map[string]Tool
 }
@@ -58,7 +58,7 @@ func (r *Registry) Names() []string {
 	return names
 }
 
-// Execute 执行工具 (对标 nanobot/agent/tools/registry.py:execute)
+// Execute 执行工具 (对标 pp-claw/agent/tools/registry.py:execute)
 func (r *Registry) Execute(ctx context.Context, name string, params map[string]any) string {
 	hint := "\n\n[Analyze the error above and try a different approach.]"
 	t := r.tools[name]

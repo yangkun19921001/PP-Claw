@@ -1,6 +1,7 @@
 # Binary
 nanobot
 go-nanobot
+pp-claw
 *.exe
 
 # Go

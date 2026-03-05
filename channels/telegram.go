@@ -15,7 +15,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// TelegramChannel Telegram 渠道 (对标 nanobot/channels/telegram.py:TelegramChannel)
+// TelegramChannel Telegram 渠道 (对标 pp-claw/channels/telegram.py:TelegramChannel)
 type TelegramChannel struct {
 	BaseChannel
 	Token string

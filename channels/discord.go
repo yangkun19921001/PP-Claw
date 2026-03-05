@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// DiscordChannel Discord 渠道 (对标 nanobot/channels/discord.py)
+// DiscordChannel Discord 渠道 (对标 pp-claw/channels/discord.py)
 type DiscordChannel struct {
 	BaseChannel
 	Token      string

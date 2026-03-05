@@ -17,7 +17,7 @@ import (
 
 var userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36"
 
-// WebSearchTool 网页搜索 (对标 nanobot/agent/tools/web.py:WebSearchTool)
+// WebSearchTool 网页搜索 (对标 pp-claw/agent/tools/web.py:WebSearchTool)
 type WebSearchTool struct {
 	APIKey     string
 	MaxResults int
@@ -49,7 +49,7 @@ func (t *WebSearchTool) Execute(_ context.Context, params map[string]any) (strin
 		apiKey = os.Getenv("BRAVE_API_KEY")
 	}
 	if apiKey == "" {
-		return "Error: Brave Search API key not configured. Set BRAVE_API_KEY env var or configure in nanobot.yaml", nil
+		return "Error: Brave Search API key not configured. Set BRAVE_API_KEY env var or configure in pp-claw.yaml", nil
 	}
 
 	count := t.MaxResults
@@ -109,7 +109,7 @@ func (t *WebSearchTool) Execute(_ context.Context, params map[string]any) (strin
 	return sb.String(), nil
 }
 
-// WebFetchTool 网页抓取 (对标 nanobot/agent/tools/web.py:WebFetchTool)
+// WebFetchTool 网页抓取 (对标 pp-claw/agent/tools/web.py:WebFetchTool)
 type WebFetchTool struct {
 	MaxChars int
 }

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Session 会话 (对标 nanobot/session/manager.py:Session)
+// Session 会话 (对标 pp-claw/session/manager.py:Session)
 type Session struct {
 	Key              string           `json:"key"`
 	Messages         []map[string]any `json:"messages"`
@@ -43,7 +43,7 @@ func (s *Session) Clear() {
 	s.UpdatedAt = time.Now()
 }
 
-// Manager 会话管理器 (对标 nanobot/session/manager.py:SessionManager)
+// Manager 会话管理器 (对标 pp-claw/session/manager.py:SessionManager)
 type Manager struct {
 	workspace string
 	sessions  map[string]*Session

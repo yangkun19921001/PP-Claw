@@ -11,7 +11,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// NewChatModel 创建 Eino ChatModel (对标 nanobot/providers/litellm_provider.py)
+// NewChatModel 创建 Eino ChatModel (对标 pp-claw/providers/litellm_provider.py)
 // 使用 OpenAI 兼容层，支持所有 OpenAI 兼容 API
 //
 // 支持的配置方式:
@@ -24,7 +24,7 @@ func NewChatModel(logger *zap.Logger, cfg *config.Config) (model.ToolCallingChat
 	providerName := cfg.GetProviderName(modelName)
 
 	if provider == nil || provider.APIKey == "" {
-		return nil, fmt.Errorf("no API key configured for model %q\n\nPlease configure in ~/.nanobot/nanobot.yaml:\n\n  providers:\n    custom:\n      api_key: \"your-api-key\"\n      api_base: \"https://your-api-base/v1\"\n\n  agents:\n    defaults:\n      model: \"your-model-name\"", modelName)
+		return nil, fmt.Errorf("no API key configured for model %q\n\nPlease configure in ~/.pp-claw/pp-claw.yaml:\n\n  providers:\n    custom:\n      api_key: \"your-api-key\"\n      api_base: \"https://your-api-base/v1\"\n\n  agents:\n    defaults:\n      model: \"your-model-name\"", modelName)
 	}
 
 	// 获取 API Base URL

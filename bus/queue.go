@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// MessageBus 异步消息总线 (对标 nanobot/bus/queue.py:MessageBus)
+// MessageBus 异步消息总线 (对标 pp-claw/bus/queue.py:MessageBus)
 // 解耦渠道与 Agent 核心的通信
 // Outbound 使用广播模式: 每个订阅者都能收到每条消息
 type MessageBus struct {

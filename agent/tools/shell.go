@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// ExecTool Shell 命令执行 (对标 nanobot/agent/tools/shell.py:ExecTool)
+// ExecTool Shell 命令执行 (对标 pp-claw/agent/tools/shell.py:ExecTool)
 type ExecTool struct {
 	WorkingDir          string
 	Timeout             int // 秒
@@ -96,7 +96,7 @@ func (t *ExecTool) Execute(ctx context.Context, params map[string]any) (string, 
 	return output, nil
 }
 
-// denyPatterns 正则安全检查模式列表 (对齐 Python nanobot)
+// denyPatterns 正则安全检查模式列表 (对齐 Python pp-claw)
 var denyPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\brm\s+-[rf]{1,2}\b`),
 	regexp.MustCompile(`(?i)\bdel\s+/[fq]\b`),

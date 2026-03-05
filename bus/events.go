@@ -2,7 +2,7 @@ package bus
 
 import "time"
 
-// InboundMessage 从渠道收到的消息 (对标 nanobot/bus/events.py:InboundMessage)
+// InboundMessage 从渠道收到的消息 (对标 pp-claw/bus/events.py:InboundMessage)
 type InboundMessage struct {
 	Channel            string         `json:"channel"`                        // telegram, discord, slack, cli...
 	SenderID           string         `json:"sender_id"`                      // 用户标识
@@ -35,7 +35,7 @@ func NewInboundMessage(channel, senderID, chatID, content string) *InboundMessag
 	}
 }
 
-// OutboundMessage 发送到渠道的消息 (对标 nanobot/bus/events.py:OutboundMessage)
+// OutboundMessage 发送到渠道的消息 (对标 pp-claw/bus/events.py:OutboundMessage)
 type OutboundMessage struct {
 	Channel  string         `json:"channel"`
 	ChatID   string         `json:"chat_id"`

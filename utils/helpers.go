@@ -13,10 +13,10 @@ func EnsureDir(path string) string {
 	return path
 }
 
-// GetDataPath 获取 nanobot 数据目录 (~/.nanobot)
+// GetDataPath 获取 pp-claw 数据目录 (~/.pp-claw)
 func GetDataPath() string {
 	home, _ := os.UserHomeDir()
-	return EnsureDir(filepath.Join(home, ".nanobot"))
+	return EnsureDir(filepath.Join(home, ".pp-claw"))
 }
 
 // GetWorkspacePath 获取 workspace 路径
@@ -26,7 +26,7 @@ func GetWorkspacePath(workspace string) string {
 		return EnsureDir(path)
 	}
 	home, _ := os.UserHomeDir()
-	return EnsureDir(filepath.Join(home, ".nanobot", "workspace"))
+	return EnsureDir(filepath.Join(home, ".pp-claw", "workspace"))
 }
 
 // GetSessionsPath 获取 sessions 存储目录

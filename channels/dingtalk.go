@@ -127,7 +127,7 @@ func (d *DingTalkChannel) Send(msg *bus.OutboundMessage) error {
 		"robotCode": d.ClientID,
 		"userIds":   []string{msg.ChatID},
 		"msgKey":    "sampleMarkdown",
-		"msgParam":  fmt.Sprintf(`{"title":"nanobot","text":"%s"}`, escapeJSON(msg.Content)),
+		"msgParam":  fmt.Sprintf(`{"title":"pp-claw","text":"%s"}`, escapeJSON(msg.Content)),
 	}
 
 	data, _ := json.Marshal(payload)

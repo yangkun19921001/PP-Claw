@@ -7,7 +7,7 @@ import (
 	"github.com/yangkun19921001/PP-Claw/bus"
 )
 
-// MessageTool 消息发送工具 (对标 nanobot/agent/tools/message.py:MessageTool)
+// MessageTool 消息发送工具 (对标 pp-claw/agent/tools/message.py:MessageTool)
 type MessageTool struct {
 	SendCallback func(*bus.OutboundMessage)
 	channel      string

@@ -8,7 +8,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Channel 渠道接口 (对标 nanobot/channels/base.py:BaseChannel)
+// Channel 渠道接口 (对标 pp-claw/channels/base.py:BaseChannel)
 type Channel interface {
 	Name() string
 	Start(ctx context.Context) error

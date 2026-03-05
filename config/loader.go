@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Load 从 YAML 文件加载配置 (对标 nanobot/config/loader.py)
+// Load 从 YAML 文件加载配置 (对标 pp-claw/config/loader.py)
 func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
 
@@ -55,7 +55,7 @@ func ExpandHome(path string) string {
 	return filepath.Join(home, path[1:])
 }
 
-// matchProvider 根据 model 前缀匹配 Provider (对标 nanobot/config/schema.py:_match_provider)
+// matchProvider 根据 model 前缀匹配 Provider (对标 pp-claw/config/schema.py:_match_provider)
 func (c *Config) matchProvider(model string) (*ProviderConfig, string) {
 	if model == "" {
 		model = c.Agents.Defaults.Model
@@ -99,7 +99,7 @@ func (c *Config) matchProvider(model string) (*ProviderConfig, string) {
 	return nil, ""
 }
 
-// providerKeywords 每个 Provider 的关键字 (对标 nanobot/providers/registry.py)
+// providerKeywords 每个 Provider 的关键字 (对标 pp-claw/providers/registry.py)
 func providerKeywords() map[string][]string {
 	return map[string][]string{
 		"anthropic":   {"claude", "anthropic"},

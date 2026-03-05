@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// ReadFileTool 读取文件 (对标 nanobot/agent/tools/filesystem.py:ReadFileTool)
+// ReadFileTool 读取文件 (对标 pp-claw/agent/tools/filesystem.py:ReadFileTool)
 type ReadFileTool struct {
 	Workspace  string
 	AllowedDir string // 为空则不限制
@@ -50,7 +50,7 @@ func (t *ReadFileTool) resolvePath(path string) string {
 	return filepath.Join(t.Workspace, path)
 }
 
-// WriteFileTool 写入文件 (对标 nanobot/agent/tools/filesystem.py:WriteFileTool)
+// WriteFileTool 写入文件 (对标 pp-claw/agent/tools/filesystem.py:WriteFileTool)
 type WriteFileTool struct {
 	Workspace  string
 	AllowedDir string
@@ -95,7 +95,7 @@ func (t *WriteFileTool) resolvePath(path string) string {
 	return filepath.Join(t.Workspace, path)
 }
 
-// EditFileTool 编辑文件 (对标 nanobot/agent/tools/filesystem.py:EditFileTool)
+// EditFileTool 编辑文件 (对标 pp-claw/agent/tools/filesystem.py:EditFileTool)
 type EditFileTool struct {
 	Workspace  string
 	AllowedDir string
@@ -153,7 +153,7 @@ func (t *EditFileTool) resolvePath(path string) string {
 	return filepath.Join(t.Workspace, path)
 }
 
-// ListDirTool 列出目录 (对标 nanobot/agent/tools/filesystem.py:ListDirTool)
+// ListDirTool 列出目录 (对标 pp-claw/agent/tools/filesystem.py:ListDirTool)
 type ListDirTool struct {
 	Workspace  string
 	AllowedDir string

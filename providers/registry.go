@@ -1,6 +1,6 @@
 package providers
 
-// ProviderSpec Provider 元数据 (对标 nanobot/providers/registry.py:ProviderSpec)
+// ProviderSpec Provider 元数据 (对标 pp-claw/providers/registry.py:ProviderSpec)
 type ProviderSpec struct {
 	Name                string
 	Keywords            []string

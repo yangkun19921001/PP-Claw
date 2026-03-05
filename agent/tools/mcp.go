@@ -15,7 +15,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// MCPToolWrapper 将单个 MCP 工具包装为 nanobot Tool (对标 mcp.py:MCPToolWrapper)
+// MCPToolWrapper 将单个 MCP 工具包装为 pp-claw Tool (对标 mcp.py:MCPToolWrapper)
 type MCPToolWrapper struct {
 	client       *mcpclient.Client
 	serverName   string
@@ -214,7 +214,7 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 	// 初始化客户端 (对标 mcp.py: session.initialize())
 	initReq := mcp.InitializeRequest{}
 	initReq.Params.ClientInfo = mcp.Implementation{
-		Name:    "go-nanobot",
+		Name:    "pp-claw",
 		Version: "0.1.0",
 	}
 	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION

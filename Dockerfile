@@ -11,7 +11,7 @@ RUN go mod download
 
 # Build static binary
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/nanobot .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/pp-claw .
 
 # ============================================================
 # Stage 2: Runtime
@@ -37,7 +37,7 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /app/nanobot .
+COPY --from=builder /app/pp-claw .
 
 # Copy runtime assets
 COPY skills/ ./skills/
@@ -45,5 +45,5 @@ COPY templates/ ./templates/
 
 EXPOSE 18790
 
-ENTRYPOINT ["./nanobot"]
+ENTRYPOINT ["./pp-claw"]
 CMD ["gateway"]

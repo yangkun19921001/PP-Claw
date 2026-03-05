@@ -97,7 +97,7 @@ func (e *EmailChannel) Send(msg *bus.OutboundMessage) error {
 	e.Logger.Info("发送邮件", zap.String("to", msg.ChatID))
 
 	// 构建邮件
-	subject := "nanobot"
+	subject := "pp-claw"
 	body := msg.Content
 	if len(body) > 100 {
 		subject = body[:100] + "..."
