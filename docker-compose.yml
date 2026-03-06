@@ -1,3 +1,4 @@
+name: pp-claw
 services:
   gateway:
     build: .
