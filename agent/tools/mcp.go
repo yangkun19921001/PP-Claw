@@ -17,7 +17,7 @@ import (
 
 // MCPToolWrapper 将单个 MCP 工具包装为 pp-claw Tool (对标 mcp.py:MCPToolWrapper)
 type MCPToolWrapper struct {
-	client       *mcpclient.Client
+	manager      *MCPManager
 	serverName   string
 	originalName string
 	toolName     string
@@ -49,16 +49,29 @@ func (t *MCPToolWrapper) Execute(ctx context.Context, params map[string]any) (st
 		)
 	}
 
-	timeout := time.Duration(t.toolTimeout) * time.Second
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	result, err := t.callTool(ctx, params)
 
-	result, err := t.client.CallTool(ctx, mcp.CallToolRequest{
-		Params: mcp.CallToolParams{
-			Name:      t.originalName,
-			Arguments: params,
-		},
-	})
+	// 检测 session 失效，自动重连并重试一次
+	if err != nil && isSessionInvalidError(err) {
+		if t.logger != nil {
+			t.logger.Warn("MCP session invalid, reconnecting",
+				zap.String("server", t.serverName),
+				zap.String("tool", t.toolName),
+			)
+		}
+		if reconnErr := t.manager.Reconnect(ctx, t.serverName); reconnErr != nil {
+			if t.logger != nil {
+				t.logger.Error("MCP reconnect failed",
+					zap.String("server", t.serverName),
+					zap.Error(reconnErr),
+				)
+			}
+			return fmt.Sprintf("Error: MCP session expired and reconnect failed: %s", reconnErr.Error()), nil
+		}
+		// 重试一次
+		result, err = t.callTool(ctx, params)
+	}
+
 	if err != nil {
 		if ctx.Err() != nil {
 			errMsg := fmt.Sprintf("(MCP tool call timed out after %ds)", t.toolTimeout)
@@ -100,11 +113,43 @@ func (t *MCPToolWrapper) Execute(ctx context.Context, params map[string]any) (st
 	return output, nil
 }
 
+// callTool 执行实际的 MCP 工具调用
+func (t *MCPToolWrapper) callTool(ctx context.Context, params map[string]any) (*mcp.CallToolResult, error) {
+	client := t.manager.GetClient(t.serverName)
+	if client == nil {
+		return nil, fmt.Errorf("no client for server %s", t.serverName)
+	}
+
+	timeout := time.Duration(t.toolTimeout) * time.Second
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	return client.CallTool(ctx, mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
+			Name:      t.originalName,
+			Arguments: params,
+		},
+	})
+}
+
+// isSessionInvalidError 检测是否为 session 失效错误
+func isSessionInvalidError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Invalid session ID") ||
+		strings.Contains(msg, "invalid session") ||
+		strings.Contains(msg, "session not found") ||
+		strings.Contains(msg, "Session not found")
+}
+
 var _ Tool = (*MCPToolWrapper)(nil)
 
 // MCPManager 管理所有 MCP 服务器连接 (对标 loop.py 中的 _mcp_* 字段和方法)
 type MCPManager struct {
-	clients    []*mcpclient.Client
+	clients    map[string]*mcpclient.Client // serverName -> client
+	configs    map[string]MCPServerConfig   // serverName -> config (用于重连)
 	connected  bool
 	connecting bool
 	mu         sync.Mutex
@@ -117,7 +162,9 @@ func NewMCPManager(logger *zap.Logger) *MCPManager {
 		logger = zap.NewNop()
 	}
 	return &MCPManager{
-		logger: logger,
+		clients: make(map[string]*mcpclient.Client),
+		configs: make(map[string]MCPServerConfig),
+		logger:  logger,
 	}
 }
 
@@ -129,6 +176,13 @@ type MCPServerConfig struct {
 	URL         string
 	Headers     map[string]string
 	ToolTimeout int
+}
+
+// GetClient 获取指定 server 的当前客户端
+func (m *MCPManager) GetClient(serverName string) *mcpclient.Client {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.clients[serverName]
 }
 
 // Connect 连接所有 MCP 服务器并注册工具 (对标 mcp.py:connect_mcp_servers + loop.py:_connect_mcp)
@@ -148,6 +202,11 @@ func (m *MCPManager) Connect(ctx context.Context, servers map[string]MCPServerCo
 	}()
 
 	for name, cfg := range servers {
+		// 保存配置用于重连
+		m.mu.Lock()
+		m.configs[name] = cfg
+		m.mu.Unlock()
+
 		if err := m.connectServer(ctx, name, cfg, registry); err != nil {
 			m.logger.Error("MCP server connection failed",
 				zap.String("server", name),
@@ -165,24 +224,50 @@ func (m *MCPManager) Connect(ctx context.Context, servers map[string]MCPServerCo
 	return nil
 }
 
-// connectServer 连接单个 MCP 服务器 (对标 mcp.py:connect_mcp_servers 内部逻辑)
-func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServerConfig, registry *Registry) error {
-	var client *mcpclient.Client
+// Reconnect 重连指定 server（关闭旧连接，建立新连接，更新 client）
+func (m *MCPManager) Reconnect(ctx context.Context, serverName string) error {
+	m.mu.Lock()
+	cfg, ok := m.configs[serverName]
+	oldClient := m.clients[serverName]
+	m.mu.Unlock()
 
-	toolTimeout := cfg.ToolTimeout
-	if toolTimeout <= 0 {
-		toolTimeout = 30
+	if !ok {
+		return fmt.Errorf("no config found for server %s", serverName)
 	}
 
+	// 关闭旧连接
+	if oldClient != nil {
+		_ = oldClient.Close()
+	}
+
+	m.logger.Info("MCP reconnecting", zap.String("server", serverName))
+
+	// 建立新连接（不注册新工具，只替换 client）
+	client, err := m.createClient(ctx, serverName, cfg)
+	if err != nil {
+		return fmt.Errorf("reconnect failed: %w", err)
+	}
+
+	m.mu.Lock()
+	m.clients[serverName] = client
+	m.mu.Unlock()
+
+	m.logger.Info("MCP reconnected", zap.String("server", serverName))
+	return nil
+}
+
+// createClient 创建并初始化一个 MCP 客户端（不注册工具）
+func (m *MCPManager) createClient(ctx context.Context, name string, cfg MCPServerConfig) (*mcpclient.Client, error) {
+	var client *mcpclient.Client
+
 	if cfg.Command != "" {
-		// Stdio 模式 (对标 mcp.py: StdioServerParameters)
+		// Stdio 模式
 		m.logger.Info("MCP connecting via stdio",
 			zap.String("server", name),
 			zap.String("command", cfg.Command),
 			zap.Strings("args", cfg.Args),
 		)
 
-		// 构建环境变量
 		env := os.Environ()
 		for k, v := range cfg.Env {
 			env = append(env, k+"="+v)
@@ -191,10 +276,9 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 		var err error
 		client, err = mcpclient.NewStdioMCPClient(cfg.Command, env, cfg.Args...)
 		if err != nil {
-			return fmt.Errorf("failed to create stdio client: %w", err)
+			return nil, fmt.Errorf("failed to create stdio client: %w", err)
 		}
 	} else if cfg.URL != "" {
-		// 根据 URL 后缀判断协议: /sse → SSE, 其他 → Streamable HTTP
 		if strings.HasSuffix(cfg.URL, "/sse") {
 			// SSE 模式
 			m.logger.Info("MCP connecting via SSE",
@@ -208,15 +292,15 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 			}
 			sseTransport, err := transport.NewSSE(cfg.URL, sseOpts...)
 			if err != nil {
-				return fmt.Errorf("failed to create SSE transport: %w", err)
+				return nil, fmt.Errorf("failed to create SSE transport: %w", err)
 			}
 
 			client = mcpclient.NewClient(sseTransport)
 			if err := client.Start(ctx); err != nil {
-				return fmt.Errorf("failed to start SSE client: %w", err)
+				return nil, fmt.Errorf("failed to start SSE client: %w", err)
 			}
 		} else {
-			// Streamable HTTP 模式 (对标 mcp.py: streamable_http_client)
+			// Streamable HTTP 模式
 			m.logger.Info("MCP connecting via Streamable HTTP",
 				zap.String("server", name),
 				zap.String("url", cfg.URL),
@@ -228,22 +312,19 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 			}
 			httpTransport, err := transport.NewStreamableHTTP(cfg.URL, opts...)
 			if err != nil {
-				return fmt.Errorf("failed to create HTTP transport: %w", err)
+				return nil, fmt.Errorf("failed to create HTTP transport: %w", err)
 			}
 
 			client = mcpclient.NewClient(httpTransport)
 			if err := client.Start(ctx); err != nil {
-				return fmt.Errorf("failed to start HTTP client: %w", err)
+				return nil, fmt.Errorf("failed to start HTTP client: %w", err)
 			}
 		}
 	} else {
-		m.logger.Warn("MCP server: no command or url configured, skipping",
-			zap.String("server", name),
-		)
-		return nil
+		return nil, fmt.Errorf("no command or url configured")
 	}
 
-	// 初始化客户端 (对标 mcp.py: session.initialize())
+	// 初始化客户端
 	initReq := mcp.InitializeRequest{}
 	initReq.Params.ClientInfo = mcp.Implementation{
 		Name:    "pp-claw",
@@ -254,8 +335,28 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 	_, err := client.Initialize(ctx, initReq)
 	if err != nil {
 		client.Close()
-		return fmt.Errorf("failed to initialize: %w", err)
+		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
+
+	return client, nil
+}
+
+// connectServer 连接单个 MCP 服务器 (对标 mcp.py:connect_mcp_servers 内部逻辑)
+func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServerConfig, registry *Registry) error {
+	toolTimeout := cfg.ToolTimeout
+	if toolTimeout <= 0 {
+		toolTimeout = 30
+	}
+
+	client, err := m.createClient(ctx, name, cfg)
+	if err != nil {
+		return err
+	}
+
+	// 保存 client
+	m.mu.Lock()
+	m.clients[name] = client
+	m.mu.Unlock()
 
 	// 列出工具 (对标 mcp.py: session.list_tools())
 	toolsResult, err := client.ListTools(ctx, mcp.ListToolsRequest{})
@@ -267,7 +368,7 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 	// 注册工具 (对标 mcp.py: MCPToolWrapper + registry.register)
 	for _, toolDef := range toolsResult.Tools {
 		wrapper := &MCPToolWrapper{
-			client:       client,
+			manager:      m,
 			serverName:   name,
 			originalName: toolDef.Name,
 			toolName:     fmt.Sprintf("mcp_%s_%s", name, toolDef.Name),
@@ -299,7 +400,6 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 		)
 	}
 
-	m.clients = append(m.clients, client)
 	m.logger.Info("MCP server connected",
 		zap.String("server", name),
 		zap.Int("tools", len(toolsResult.Tools)),
@@ -318,7 +418,7 @@ func (m *MCPManager) Close() {
 			m.logger.Error("MCP client close error", zap.Error(err))
 		}
 	}
-	m.clients = nil
+	m.clients = make(map[string]*mcpclient.Client)
 	m.connected = false
 }
 

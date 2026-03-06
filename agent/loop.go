@@ -152,7 +152,22 @@ func (l *AgentLoop) registerDefaultTools() {
 
 	// 飞书知识库和文档工具
 	if l.cfg.Channels.Feishu.Enabled && (l.cfg.Channels.Feishu.WikiEnabled || l.cfg.Channels.Feishu.DocsEnabled) {
-		feishuTools := tools.CreateFeishuTools(l.cfg.Channels.Feishu.AppID, l.cfg.Channels.Feishu.AppSecret)
+		oauthPort := l.cfg.Channels.Feishu.OAuthPort
+		if oauthPort <= 0 {
+			oauthPort = 19876
+		}
+		searchMax := l.cfg.Channels.Feishu.SearchMaxResults
+		if searchMax <= 0 {
+			searchMax = 3
+		}
+		feishuTools := tools.CreateFeishuTools(&tools.FeishuToolsConfig{
+			AppID:            l.cfg.Channels.Feishu.AppID,
+			AppSecret:        l.cfg.Channels.Feishu.AppSecret,
+			OAuthRedirectURL: l.cfg.Channels.Feishu.OAuthRedirectURL,
+			OAuthPort:        oauthPort,
+			SearchMaxResults: searchMax,
+			Logger:           l.logger,
+		})
 		for _, ft := range feishuTools {
 			l.tools.Register(ft)
 		}

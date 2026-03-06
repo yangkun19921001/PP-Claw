@@ -6,21 +6,53 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	larkdocx "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
+	larksearch "github.com/larksuite/oapi-sdk-go/v3/service/search/v2"
 	larkwiki "github.com/larksuite/oapi-sdk-go/v3/service/wiki/v2"
 )
 
 func init() {
-	RegisterFeishuToolFactory(func(appID, appSecret string) Tool {
-		return &FeishuWikiTool{Client: lark.NewClient(appID, appSecret)}
+	RegisterFeishuToolFactory(func(cfg *FeishuToolsConfig) Tool {
+		client := lark.NewClient(cfg.AppID, cfg.AppSecret)
+
+		tool := &FeishuWikiTool{
+			Client:           client,
+			OAuthRedirectURL: cfg.OAuthRedirectURL,
+			SearchMaxResults: cfg.SearchMaxResults,
+		}
+
+		// 配置了 OAuth 才启用搜索的用户授权流程
+		if cfg.OAuthPort > 0 || cfg.OAuthRedirectURL != "" {
+			tool.TokenManager = NewFeishuTokenManager(&FeishuTokenManagerConfig{
+				Client:           client,
+				AppID:            cfg.AppID,
+				OAuthRedirectURL: cfg.OAuthRedirectURL,
+				OAuthPort:        cfg.OAuthPort,
+				Logger:           cfg.Logger,
+			})
+			if tool.OAuthRedirectURL == "" {
+				port := cfg.OAuthPort
+				if port <= 0 {
+					port = 19876
+				}
+				tool.OAuthRedirectURL = fmt.Sprintf("http://localhost:%d/feishu/oauth/callback", port)
+			}
+		}
+
+		return tool
 	})
 }
 
 // FeishuWikiTool 飞书知识库工具
 type FeishuWikiTool struct {
-	Client *lark.Client
+	Client           *lark.Client
+	TokenManager     *FeishuTokenManager
+	OAuthRedirectURL string
+	SearchMaxResults int
 }
 
 func (t *FeishuWikiTool) Name() string { return "feishu_wiki" }
@@ -73,7 +105,7 @@ func (t *FeishuWikiTool) Execute(ctx context.Context, params map[string]any) (st
 	case "read_node":
 		return t.readNode(ctx, params)
 	case "search":
-		return t.search(params)
+		return t.search(ctx, params)
 	default:
 		return "", fmt.Errorf("unknown action: %s", action)
 	}
@@ -234,36 +266,156 @@ func (t *FeishuWikiTool) readNode(ctx context.Context, params map[string]any) (s
 
 	// 读取文档内容（仅 docx 类型）
 	if objType == "docx" && objToken != "" {
-		docReq := larkdocx.NewRawContentDocumentReqBuilder().DocumentId(objToken).Lang(0).Build()
-		docResp, err := t.Client.Docx.Document.RawContent(ctx, docReq)
+		content, err := t.readDocContent(ctx, objToken)
 		if err != nil {
-			return "", fmt.Errorf("read document failed: %w", err)
+			return "", err
 		}
-		if !docResp.Success() {
-			return "", fmt.Errorf("read document failed: code=%d msg=%s", docResp.Code, docResp.Msg)
-		}
-
-		content := ""
-		if docResp.Data.Content != nil {
-			content = *docResp.Data.Content
-		}
-
-		// 截断过长内容
-		const maxLen = 30000
-		if len(content) > maxLen {
-			content = content[:maxLen] + "\n\n... (content truncated)"
-		}
-
 		return fmt.Sprintf("# %s\n\n%s", title, content), nil
 	}
 
 	return fmt.Sprintf("Node: %s (type: %s, obj_token: %s)\nThis node type does not support direct content reading.", title, objType, objToken), nil
 }
 
-func (t *FeishuWikiTool) search(params map[string]any) (string, error) {
+// search 搜索飞书文档和知识库（需要 user_access_token）
+func (t *FeishuWikiTool) search(ctx context.Context, params map[string]any) (string, error) {
 	query, _ := params["query"].(string)
 	if query == "" {
 		return "", fmt.Errorf("query is required for search")
 	}
-	return fmt.Sprintf("Wiki search is not directly supported via the current API. To find content, use list_spaces to get available spaces, then list_nodes to browse nodes in a space, and read_node to read specific documents. Query: %s", query), nil
+
+	// 检查 token manager
+	if t.TokenManager == nil {
+		return "Search is not available: OAuth not configured. Please set feishu.oauth_port and feishu.oauth_redirect_url in config.", nil
+	}
+
+	// 获取 user token
+	userToken, err := t.TokenManager.GetUserToken(ctx)
+	if err != nil {
+		// 没有 token，返回授权链接
+		authURL := t.TokenManager.GetAuthURL(t.OAuthRedirectURL)
+		return fmt.Sprintf("需要飞书用户授权才能使用搜索功能。请点击以下链接完成授权，授权后重新搜索即可：\n\n%s", authURL), nil
+	}
+
+	// 调用搜索 API
+	maxResults := t.SearchMaxResults
+	if maxResults <= 0 {
+		maxResults = 3
+	}
+
+	pageSize := 20
+	if ps, ok := params["page_size"].(float64); ok && ps > 0 {
+		pageSize = int(ps)
+	}
+
+	searchBody := larksearch.NewSearchDocWikiReqBodyBuilder().
+		Query(query).
+		PageSize(pageSize).
+		Build()
+
+	searchReq := larksearch.NewSearchDocWikiReqBuilder().
+		Body(searchBody).
+		Build()
+
+	resp, err := t.Client.Search.DocWiki.Search(ctx, searchReq,
+		larkcore.WithUserAccessToken(userToken))
+	if err != nil {
+		return "", fmt.Errorf("search failed: %w", err)
+	}
+	if !resp.Success() {
+		// token 可能已失效
+		if resp.Code == 99991668 || resp.Code == 99991672 {
+			authURL := t.TokenManager.GetAuthURL(t.OAuthRedirectURL)
+			return fmt.Sprintf("用户授权已失效，请重新授权：\n\n%s", authURL), nil
+		}
+		return "", fmt.Errorf("search failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+
+	if resp.Data == nil || len(resp.Data.ResUnits) == 0 {
+		return fmt.Sprintf("未找到与 \"%s\" 相关的文档。", query), nil
+	}
+
+	// 构建搜索结果，自动读取前 N 个文档内容
+	var sb strings.Builder
+	total := 0
+	if resp.Data.Total != nil {
+		total = *resp.Data.Total
+	}
+	sb.WriteString(fmt.Sprintf("搜索 \"%s\" 共找到 %d 条结果：\n\n", query, total))
+
+	readCount := 0
+	for i, unit := range resp.Data.ResUnits {
+		title := ""
+		if unit.TitleHighlighted != nil {
+			title = *unit.TitleHighlighted
+		}
+		summary := ""
+		if unit.SummaryHighlighted != nil {
+			summary = *unit.SummaryHighlighted
+		}
+		entityType := ""
+		if unit.EntityType != nil {
+			entityType = *unit.EntityType
+		}
+
+		docToken := ""
+		docType := ""
+		docURL := ""
+		if unit.ResultMeta != nil {
+			if unit.ResultMeta.Token != nil {
+				docToken = *unit.ResultMeta.Token
+			}
+			if unit.ResultMeta.DocTypes != nil {
+				docType = *unit.ResultMeta.DocTypes
+			}
+			if unit.ResultMeta.Url != nil {
+				docURL = *unit.ResultMeta.Url
+			}
+		}
+
+		sb.WriteString(fmt.Sprintf("---\n### %d. %s\n", i+1, title))
+		sb.WriteString(fmt.Sprintf("类型: %s (%s) | 链接: %s\n", entityType, docType, docURL))
+		if summary != "" {
+			sb.WriteString(fmt.Sprintf("摘要: %s\n", summary))
+		}
+
+		// 自动读取前 N 个 docx 文档的正文
+		if readCount < maxResults && docToken != "" && docType == "docx" {
+			content, err := t.readDocContent(ctx, docToken)
+			if err == nil && content != "" {
+				sb.WriteString(fmt.Sprintf("\n**正文内容：**\n%s\n", content))
+				readCount++
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	if resp.Data.HasMore != nil && *resp.Data.HasMore {
+		sb.WriteString("（还有更多结果，可通过 page_token 翻页）\n")
+	}
+
+	return sb.String(), nil
+}
+
+// readDocContent 读取文档原始内容
+func (t *FeishuWikiTool) readDocContent(ctx context.Context, docID string) (string, error) {
+	docReq := larkdocx.NewRawContentDocumentReqBuilder().DocumentId(docID).Lang(0).Build()
+	docResp, err := t.Client.Docx.Document.RawContent(ctx, docReq)
+	if err != nil {
+		return "", fmt.Errorf("read document failed: %w", err)
+	}
+	if !docResp.Success() {
+		return "", fmt.Errorf("read document failed: code=%d msg=%s", docResp.Code, docResp.Msg)
+	}
+
+	content := ""
+	if docResp.Data.Content != nil {
+		content = *docResp.Data.Content
+	}
+
+	const maxLen = 30000
+	if len(content) > maxLen {
+		content = content[:maxLen] + "\n\n... (content truncated)"
+	}
+
+	return content, nil
 }

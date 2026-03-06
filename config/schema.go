@@ -181,6 +181,9 @@ type FeishuConfig struct {
 	AllowFrom         []string `yaml:"allow_from"`
 	WikiEnabled       bool     `yaml:"wiki_enabled"`
 	DocsEnabled       bool     `yaml:"docs_enabled"`
+	OAuthRedirectURL  string   `yaml:"oauth_redirect_url"`  // OAuth 回调地址，如 http://localhost:19876/feishu/oauth/callback
+	OAuthPort         int      `yaml:"oauth_port"`           // OAuth 回调 HTTP 端口，默认 19876
+	SearchMaxResults  int      `yaml:"search_max_results"`   // 搜索后自动读取的文档数量，默认 3
 }
 
 type DingTalkConfig struct {

@@ -12,8 +12,8 @@ import (
 )
 
 func init() {
-	RegisterFeishuToolFactory(func(appID, appSecret string) Tool {
-		return &FeishuDocsTool{Client: lark.NewClient(appID, appSecret)}
+	RegisterFeishuToolFactory(func(cfg *FeishuToolsConfig) Tool {
+		return &FeishuDocsTool{Client: lark.NewClient(cfg.AppID, cfg.AppSecret)}
 	})
 }
 

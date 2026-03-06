@@ -1,7 +1,19 @@
 package tools
 
+import "go.uber.org/zap"
+
+// FeishuToolsConfig 飞书工具创建配置
+type FeishuToolsConfig struct {
+	AppID            string
+	AppSecret        string
+	OAuthRedirectURL string
+	OAuthPort        int
+	SearchMaxResults int
+	Logger           *zap.Logger
+}
+
 // FeishuToolFactory 飞书工具工厂函数类型
-type FeishuToolFactory func(appID, appSecret string) Tool
+type FeishuToolFactory func(cfg *FeishuToolsConfig) Tool
 
 var feishuToolFactories []FeishuToolFactory
 
@@ -11,10 +23,10 @@ func RegisterFeishuToolFactory(factory FeishuToolFactory) {
 }
 
 // CreateFeishuTools 创建所有已注册的飞书工具实例
-func CreateFeishuTools(appID, appSecret string) []Tool {
+func CreateFeishuTools(cfg *FeishuToolsConfig) []Tool {
 	var result []Tool
 	for _, f := range feishuToolFactories {
-		result = append(result, f(appID, appSecret))
+		result = append(result, f(cfg))
 	}
 	return result
 }
