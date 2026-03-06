@@ -8,6 +8,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
+	"github.com/eino-contrib/jsonschema"
 )
 
 // Tool 工具接口 (对标 pp-claw/agent/tools/base.py:Tool)
@@ -107,9 +108,20 @@ type einoToolAdapter struct {
 }
 
 func (a *einoToolAdapter) Info(_ context.Context) (*schema.ToolInfo, error) {
-	params := a.tool.Parameters()
+	// 优先使用原始 JSON Schema（MCP 工具），避免手动转换丢失 schema 信息
+	if mcpTool, ok := a.tool.(*MCPToolWrapper); ok && mcpTool.rawSchema != nil {
+		var js jsonschema.Schema
+		if err := json.Unmarshal(mcpTool.rawSchema, &js); err == nil {
+			return &schema.ToolInfo{
+				Name:        a.tool.Name(),
+				Desc:        a.tool.Description(),
+				ParamsOneOf: schema.NewParamsOneOfByJSONSchema(&js),
+			}, nil
+		}
+	}
 
-	// 解析 parameters 中的 properties 和 required
+	// 回退: 手动转换 parameters map (非 MCP 工具)
+	params := a.tool.Parameters()
 	properties := map[string]*schema.ParameterInfo{}
 	if props, ok := params["properties"].(map[string]any); ok {
 		required := map[string]bool{}

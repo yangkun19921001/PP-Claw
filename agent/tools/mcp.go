@@ -23,7 +23,9 @@ type MCPToolWrapper struct {
 	toolName     string
 	description  string
 	parameters   map[string]any
+	rawSchema    json.RawMessage // 保留原始 JSON Schema，用于 Eino 直接透传
 	toolTimeout  int
+	logger       *zap.Logger
 }
 
 func (t *MCPToolWrapper) Name() string        { return t.toolName }
@@ -37,6 +39,16 @@ func (t *MCPToolWrapper) Parameters() map[string]any {
 
 // Execute 调用 MCP 工具 (对标 mcp.py:MCPToolWrapper.execute)
 func (t *MCPToolWrapper) Execute(ctx context.Context, params map[string]any) (string, error) {
+	// 记录 MCP 工具调用参数
+	if t.logger != nil {
+		paramsJSON, _ := json.Marshal(params)
+		t.logger.Info("MCP tool call",
+			zap.String("tool", t.toolName),
+			zap.String("original_name", t.originalName),
+			zap.String("params", string(paramsJSON)),
+		)
+	}
+
 	timeout := time.Duration(t.toolTimeout) * time.Second
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -49,9 +61,17 @@ func (t *MCPToolWrapper) Execute(ctx context.Context, params map[string]any) (st
 	})
 	if err != nil {
 		if ctx.Err() != nil {
-			return fmt.Sprintf("(MCP tool call timed out after %ds)", t.toolTimeout), nil
+			errMsg := fmt.Sprintf("(MCP tool call timed out after %ds)", t.toolTimeout)
+			if t.logger != nil {
+				t.logger.Warn("MCP tool call timeout", zap.String("tool", t.toolName), zap.Int("timeout", t.toolTimeout))
+			}
+			return errMsg, nil
 		}
-		return fmt.Sprintf("Error calling MCP tool '%s': %s", t.toolName, err.Error()), nil
+		errMsg := fmt.Sprintf("Error calling MCP tool '%s': %s", t.toolName, err.Error())
+		if t.logger != nil {
+			t.logger.Error("MCP tool call error", zap.String("tool", t.toolName), zap.Error(err))
+		}
+		return errMsg, nil
 	}
 
 	var parts []string
@@ -62,10 +82,22 @@ func (t *MCPToolWrapper) Execute(ctx context.Context, params map[string]any) (st
 			parts = append(parts, fmt.Sprintf("%v", block))
 		}
 	}
+	output := strings.Join(parts, "\n")
 	if len(parts) == 0 {
-		return "(no output)", nil
+		output = "(no output)"
 	}
-	return strings.Join(parts, "\n"), nil
+
+	if t.logger != nil {
+		preview := output
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		t.logger.Info("MCP tool call result",
+			zap.String("tool", t.toolName),
+			zap.String("result_preview", preview),
+		)
+	}
+	return output, nil
 }
 
 var _ Tool = (*MCPToolWrapper)(nil)
@@ -241,14 +273,23 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 			toolName:     fmt.Sprintf("mcp_%s_%s", name, toolDef.Name),
 			description:  toolDef.Description,
 			toolTimeout:  toolTimeout,
+			logger:       m.logger,
 		}
 
-		// 转换 inputSchema 为 map[string]any
-		if toolDef.RawInputSchema != nil {
+		// 从 InputSchema 构建 parameters 和 rawSchema
+		// 注意: mcp-go 的 Tool.RawInputSchema 字段有 json:"-" 标签，反序列化时不会填充
+		// 实际 schema 在 Tool.InputSchema (ToolInputSchema) 中
+		inputSchemaJSON, err := json.Marshal(toolDef.InputSchema)
+		if err == nil && len(inputSchemaJSON) > 2 { // > 2 排除 "{}"
+			wrapper.rawSchema = inputSchemaJSON
 			var inputSchema map[string]any
-			if err := json.Unmarshal(toolDef.RawInputSchema, &inputSchema); err == nil {
+			if err := json.Unmarshal(inputSchemaJSON, &inputSchema); err == nil {
 				wrapper.parameters = inputSchema
 			}
+			m.logger.Debug("MCP tool schema",
+				zap.String("tool", wrapper.toolName),
+				zap.String("schema", string(inputSchemaJSON)),
+			)
 		}
 
 		registry.Register(wrapper)
