@@ -7,7 +7,6 @@ type FeishuToolsConfig struct {
 	AppID            string
 	AppSecret        string
 	OAuthRedirectURL string
-	OAuthPort        int
 	SearchMaxResults int
 	Logger           *zap.Logger
 }

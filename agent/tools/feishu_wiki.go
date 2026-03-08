@@ -26,21 +26,12 @@ func init() {
 		}
 
 		// 配置了 OAuth 才启用搜索的用户授权流程
-		if cfg.OAuthPort > 0 || cfg.OAuthRedirectURL != "" {
+		if cfg.OAuthRedirectURL != "" {
 			tool.TokenManager = NewFeishuTokenManager(&FeishuTokenManagerConfig{
-				Client:           client,
-				AppID:            cfg.AppID,
-				OAuthRedirectURL: cfg.OAuthRedirectURL,
-				OAuthPort:        cfg.OAuthPort,
-				Logger:           cfg.Logger,
+				Client: client,
+				AppID:  cfg.AppID,
+				Logger: cfg.Logger,
 			})
-			if tool.OAuthRedirectURL == "" {
-				port := cfg.OAuthPort
-				if port <= 0 {
-					port = 19876
-				}
-				tool.OAuthRedirectURL = fmt.Sprintf("http://localhost:%d/feishu/oauth/callback", port)
-			}
 		}
 
 		return tool

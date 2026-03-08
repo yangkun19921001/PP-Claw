@@ -34,20 +34,13 @@ type FeishuTokenManager struct {
 
 	mu    sync.RWMutex
 	token *FeishuTokenData
-
-	// OAuth 回调通知
-	callbackCh chan string // 收到 code 后通知
-	server     *http.Server
 }
 
 // FeishuTokenManagerConfig token manager 配置
 type FeishuTokenManagerConfig struct {
-	Client           *lark.Client
-	AppID            string
-	AppSecret        string
-	OAuthRedirectURL string
-	OAuthPort        int
-	Logger           *zap.Logger
+	Client *lark.Client
+	AppID  string
+	Logger *zap.Logger
 }
 
 // NewFeishuTokenManager 创建 token manager
@@ -60,29 +53,15 @@ func NewFeishuTokenManager(cfg *FeishuTokenManagerConfig) *FeishuTokenManager {
 	home, _ := os.UserHomeDir()
 	tokenFile := filepath.Join(home, ".pp-claw", "feishu_token.json")
 
-	port := cfg.OAuthPort
-	if port <= 0 {
-		port = 19876
-	}
-
 	mgr := &FeishuTokenManager{
-		client:     cfg.Client,
-		appID:      cfg.AppID,
-		tokenFile:  tokenFile,
-		logger:     logger,
-		callbackCh: make(chan string, 1),
+		client:    cfg.Client,
+		appID:     cfg.AppID,
+		tokenFile: tokenFile,
+		logger:    logger,
 	}
 
 	// 加载已有 token
 	mgr.loadToken()
-
-	// 启动回调 HTTP server
-	redirectURL := cfg.OAuthRedirectURL
-	if redirectURL == "" {
-		redirectURL = fmt.Sprintf("http://localhost:%d/feishu/oauth/callback", port)
-	}
-
-	go mgr.startCallbackServer(port)
 
 	return mgr
 }
@@ -90,7 +69,7 @@ func NewFeishuTokenManager(cfg *FeishuTokenManagerConfig) *FeishuTokenManager {
 // GetAuthURL 生成用户授权链接
 func (m *FeishuTokenManager) GetAuthURL(redirectURL string) string {
 	return fmt.Sprintf(
-		"https://open.feishu.cn/open-apis/authen/v1/authorize?app_id=%s&redirect_uri=%s&scope=search:docs:readonly",
+		"https://open.feishu.cn/open-apis/authen/v1/authorize?app_id=%s&redirect_uri=%s",
 		m.appID, redirectURL,
 	)
 }
@@ -164,7 +143,26 @@ func (m *FeishuTokenManager) HandleCallback(ctx context.Context, code string) er
 	return nil
 }
 
-// HasToken 检查是否已有 token（可能已过期，但至少有 refresh_token）
+// ServeHTTP 实现 http.HandlerFunc，供外部 HTTP server 挂载
+func (m *FeishuTokenManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		http.Error(w, "missing code parameter", http.StatusBadRequest)
+		return
+	}
+
+	if err := m.HandleCallback(r.Context(), code); err != nil {
+		m.logger.Error("Feishu OAuth callback failed", zap.Error(err))
+		http.Error(w, fmt.Sprintf("Authorization failed: %s", err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, `<!DOCTYPE html><html><body style="text-align:center;padding-top:50px;font-family:sans-serif;">
+<h2>✅ 飞书授权成功</h2><p>你可以关闭此页面，回到 pp-claw 继续使用搜索功能。</p></body></html>`)
+}
+
+// HasToken 检查是否已有 token
 func (m *FeishuTokenManager) HasToken() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -193,7 +191,6 @@ func (m *FeishuTokenManager) refreshToken(ctx context.Context, refreshToken stri
 		return "", fmt.Errorf("refresh token failed: %w", err)
 	}
 	if !resp.Success() {
-		// refresh 失败，清除 token
 		m.token = nil
 		return "", fmt.Errorf("refresh token failed: code=%d msg=%s", resp.Code, resp.Msg)
 	}
@@ -215,41 +212,6 @@ func (m *FeishuTokenManager) refreshToken(ctx context.Context, refreshToken stri
 	m.logger.Info("Feishu user token refreshed", zap.Time("expires_at", tokenData.ExpiresAt))
 
 	return tokenData.AccessToken, nil
-}
-
-// startCallbackServer 启动 OAuth 回调 HTTP 服务
-func (m *FeishuTokenManager) startCallbackServer(port int) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/feishu/oauth/callback", m.handleHTTPCallback)
-
-	m.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: mux,
-	}
-
-	m.logger.Info("Feishu OAuth callback server starting", zap.Int("port", port))
-	if err := m.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		m.logger.Error("Feishu OAuth callback server error", zap.Error(err))
-	}
-}
-
-// handleHTTPCallback HTTP 回调处理
-func (m *FeishuTokenManager) handleHTTPCallback(w http.ResponseWriter, r *http.Request) {
-	code := r.URL.Query().Get("code")
-	if code == "" {
-		http.Error(w, "missing code parameter", http.StatusBadRequest)
-		return
-	}
-
-	if err := m.HandleCallback(r.Context(), code); err != nil {
-		m.logger.Error("Feishu OAuth callback failed", zap.Error(err))
-		http.Error(w, fmt.Sprintf("Authorization failed: %s", err.Error()), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, `<!DOCTYPE html><html><body style="text-align:center;padding-top:50px;font-family:sans-serif;">
-<h2>✅ 飞书授权成功</h2><p>你可以关闭此页面，回到 pp-claw 继续使用搜索功能。</p></body></html>`)
 }
 
 // loadToken 从文件加载 token
@@ -294,15 +256,6 @@ func (m *FeishuTokenManager) saveToken(token *FeishuTokenData) {
 
 	if err := os.WriteFile(m.tokenFile, data, 0600); err != nil {
 		m.logger.Error("Failed to save token file", zap.Error(err))
-	}
-}
-
-// Close 关闭回调服务器
-func (m *FeishuTokenManager) Close() {
-	if m.server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		m.server.Shutdown(ctx)
 	}
 }
 

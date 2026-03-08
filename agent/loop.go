@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 	"sync"
@@ -77,7 +78,7 @@ func NewAgentLoop(cfg *AgentLoopConfig) (*AgentLoop, error) {
 		logger:        logger,
 		context:       NewContextBuilder(workspace),
 		sessions:      cfg.Sessions,
-		tools:         tools.NewRegistry(),
+		tools:         tools.NewRegistry(logger),
 		subagents:     NewSubagentManager(workspace, cfg.Bus, agentCfg.Model, logger),
 		memory:        NewMemoryStore(workspace, cfg.ChatModel, logger),
 		mcpManager:    tools.NewMCPManager(logger),
@@ -152,19 +153,19 @@ func (l *AgentLoop) registerDefaultTools() {
 
 	// 飞书知识库和文档工具
 	if l.cfg.Channels.Feishu.Enabled && (l.cfg.Channels.Feishu.WikiEnabled || l.cfg.Channels.Feishu.DocsEnabled) {
-		oauthPort := l.cfg.Channels.Feishu.OAuthPort
-		if oauthPort <= 0 {
-			oauthPort = 19876
-		}
 		searchMax := l.cfg.Channels.Feishu.SearchMaxResults
 		if searchMax <= 0 {
 			searchMax = 3
 		}
+		// OAuthRedirectURL 默认使用 gateway 端口
+		oauthRedirect := l.cfg.Channels.Feishu.OAuthRedirectURL
+		if oauthRedirect == "" && l.cfg.Gateway.Port > 0 {
+			oauthRedirect = fmt.Sprintf("http://localhost:%d/feishu/oauth/callback", l.cfg.Gateway.Port)
+		}
 		feishuTools := tools.CreateFeishuTools(&tools.FeishuToolsConfig{
 			AppID:            l.cfg.Channels.Feishu.AppID,
 			AppSecret:        l.cfg.Channels.Feishu.AppSecret,
-			OAuthRedirectURL: l.cfg.Channels.Feishu.OAuthRedirectURL,
-			OAuthPort:        oauthPort,
+			OAuthRedirectURL: oauthRedirect,
 			SearchMaxResults: searchMax,
 			Logger:           l.logger,
 		})
@@ -247,6 +248,16 @@ func (l *AgentLoop) Stop() {
 	l.running = false
 	l.CloseMCP()
 	l.logger.Info("Agent loop stopping")
+}
+
+// GetFeishuOAuthHandler 返回飞书 OAuth 回调的 HTTP handler（挂载到 gateway HTTP server）
+func (l *AgentLoop) GetFeishuOAuthHandler() http.Handler {
+	if t := l.tools.Get("feishu_wiki"); t != nil {
+		if wt, ok := t.(*tools.FeishuWikiTool); ok && wt.TokenManager != nil {
+			return wt.TokenManager
+		}
+	}
+	return nil
 }
 
 // connectMCP 连接 MCP 服务器 (对标 loop.py:_connect_mcp)
@@ -390,6 +401,18 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 		finalContent = "I've completed processing but have no response to give."
 	}
 
+	// 日志：最终响应
+	responsePreview := finalContent
+	if len(responsePreview) > 200 {
+		responsePreview = responsePreview[:200] + "..."
+	}
+	l.logger.Info("🤖 Agent response",
+		zap.String("channel", msg.Channel),
+		zap.String("chat_id", msg.ChatID),
+		zap.Int("length", len(finalContent)),
+		zap.String("preview", responsePreview),
+	)
+
 	// 保存会话
 	sess.AddMessage("user", msg.Content)
 	sess.AddMessage("assistant", finalContent)
@@ -483,14 +506,22 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 			if msg.Role == schema.Assistant {
 				content := stripThink(msg.Content)
 
-				// 检测 tool calls → 发送 progress
-				if len(msg.ToolCalls) > 0 && onProgress != nil {
-					if content != "" {
-						onProgress(content, false)
+				// 检测 tool calls → 发送 progress + 日志
+				if len(msg.ToolCalls) > 0 {
+					for _, tc := range msg.ToolCalls {
+						l.logger.Info("🤖 Assistant tool call",
+							zap.String("tool", tc.Function.Name),
+							zap.String("args", tc.Function.Arguments),
+						)
 					}
-					hint := formatToolHint(msg.ToolCalls)
-					if hint != "" {
-						onProgress(hint, true)
+					if onProgress != nil {
+						if content != "" {
+							onProgress(content, false)
+						}
+						hint := formatToolHint(msg.ToolCalls)
+						if hint != "" {
+							onProgress(hint, true)
+						}
 					}
 				}
 

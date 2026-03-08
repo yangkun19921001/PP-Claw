@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -169,6 +170,37 @@ func runGateway() error {
 			logger.Error("渠道启动失败", zap.Error(err))
 		}
 	}()
+
+	// 启动 Gateway HTTP 服务器（复用 gateway 端口，挂载 OAuth 回调等路由）
+	if cfg.Gateway.Port > 0 {
+		mux := http.NewServeMux()
+		// 健康检查
+		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, "ok")
+		})
+		// 飞书 OAuth 回调
+		if handler := agentLoop.GetFeishuOAuthHandler(); handler != nil {
+			mux.Handle("/feishu/oauth/callback", handler)
+			logger.Info("Feishu OAuth callback registered",
+				zap.String("path", "/feishu/oauth/callback"),
+				zap.Int("port", cfg.Gateway.Port))
+		}
+		gatewayAddr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
+		srv := &http.Server{Addr: gatewayAddr, Handler: mux}
+		go func() {
+			logger.Info("Gateway HTTP server starting", zap.String("addr", gatewayAddr))
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("Gateway HTTP server error", zap.Error(err))
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			srv.Shutdown(shutdownCtx)
+		}()
+	}
 
 	// 启动 CLI 渠道 (outbound 消费者)
 	go cliOutboundHandler(ctx, msgBus, logger)
