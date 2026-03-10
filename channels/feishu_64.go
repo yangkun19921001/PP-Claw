@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
@@ -174,45 +175,18 @@ func (f *FeishuChannel) Send(msg *bus.OutboundMessage) error {
 		receiveIDType = "open_id"
 	}
 
-	// 发送文本消息 (构建 interactive card)
+	// 发送文本消息：按表格数量拆分，避免超出飞书 card table number over limit
 	if msg.Content != "" {
-		card := f.buildCardElements(msg.Content)
-		content, _ := json.Marshal(card)
-
-		if msg.ReplyTo != "" {
-			// 引用回复模式
-			replyReq := larkim.NewReplyMessageReqBuilder().
-				MessageId(msg.ReplyTo).
-				Body(larkim.NewReplyMessageReqBodyBuilder().
-					MsgType("interactive").
-					Content(string(content)).
-					Build()).
-				Build()
-
-			resp, err := f.client.Im.Message.Reply(ctx, replyReq)
+		parts := splitContentByTables(msg.Content)
+		lastReplyTo := msg.ReplyTo
+		for i, part := range parts {
+			msgID, err := f.sendCard(ctx, receiveIDType, msg.ChatID, lastReplyTo, part)
 			if err != nil {
-				return fmt.Errorf("回复飞书消息失败: %w", err)
+				return err
 			}
-			if !resp.Success() {
-				return fmt.Errorf("回复飞书消息失败: code=%d msg=%s", resp.Code, resp.Msg)
-			}
-		} else {
-			// 普通发送模式
-			req := larkim.NewCreateMessageReqBuilder().
-				ReceiveIdType(receiveIDType).
-				Body(larkim.NewCreateMessageReqBodyBuilder().
-					ReceiveId(msg.ChatID).
-					MsgType("interactive").
-					Content(string(content)).
-					Build()).
-				Build()
-
-			resp, err := f.client.Im.Message.Create(ctx, req)
-			if err != nil {
-				return fmt.Errorf("发送飞书消息失败: %w", err)
-			}
-			if !resp.Success() {
-				return fmt.Errorf("发送飞书消息失败: code=%d msg=%s", resp.Code, resp.Msg)
+			lastReplyTo = msgID
+			if i < len(parts)-1 {
+				time.Sleep(200 * time.Millisecond)
 			}
 		}
 	}
@@ -413,29 +387,32 @@ var mentionRE = regexp.MustCompile(`@_user_\d+\s*`)
 var tableRE = regexp.MustCompile(`(?m)((?:^[ \t]*\|.+\|[ \t]*\n)(?:^[ \t]*\|[-:\s|]+\|[ \t]*\n)(?:^[ \t]*\|.+\|[ \t]*\n?)+)`)
 var headingRE = regexp.MustCompile(`(?m)^(#{1,6})\s+(.+)$`)
 
-// buildCardElements 构建飞书 Card 消息
+// buildCardElements 构建飞书 Card 消息 (Card JSON 2.0)
 func (f *FeishuChannel) buildCardElements(content string) map[string]any {
 	elements := f.splitHeadings(content)
 	return map[string]any{
-		"config":   map[string]any{"wide_screen_mode": true},
-		"elements": elements,
+		"schema": "2.0",
+		"config": map[string]any{"wide_screen_mode": true},
+		"body": map[string]any{
+			"elements": elements,
+		},
 	}
 }
 
-// splitHeadings 将内容按标题分割
+// splitHeadings 将内容按标题分割，同时将 Markdown 表格转为飞书 table 组件
 func (f *FeishuChannel) splitHeadings(content string) []map[string]any {
 	var elements []map[string]any
 
 	matches := headingRE.FindAllStringIndex(content, -1)
 	if len(matches) == 0 {
-		return []map[string]any{{"tag": "markdown", "content": content}}
+		return processContent(content)
 	}
 
 	lastEnd := 0
 	for _, loc := range matches {
 		before := strings.TrimSpace(content[lastEnd:loc[0]])
 		if before != "" {
-			elements = append(elements, map[string]any{"tag": "markdown", "content": before})
+			elements = append(elements, processContent(before)...)
 		}
 		heading := headingRE.FindStringSubmatch(content[loc[0]:loc[1]])
 		if len(heading) >= 3 {
@@ -452,10 +429,227 @@ func (f *FeishuChannel) splitHeadings(content string) []map[string]any {
 
 	remaining := strings.TrimSpace(content[lastEnd:])
 	if remaining != "" {
-		elements = append(elements, map[string]any{"tag": "markdown", "content": remaining})
+		elements = append(elements, processContent(remaining)...)
 	}
 
 	return elements
+}
+
+// processContent 处理一段文本内容，将其中的 Markdown 表格转为飞书 table 组件，
+// 非表格部分保持为 markdown 元素
+func processContent(content string) []map[string]any {
+	locs := tableRE.FindAllStringIndex(content, -1)
+	if len(locs) == 0 {
+		return []map[string]any{{"tag": "markdown", "content": content}}
+	}
+
+	var elements []map[string]any
+	lastEnd := 0
+	for _, loc := range locs {
+		// 表格前的文字
+		before := strings.TrimSpace(content[lastEnd:loc[0]])
+		if before != "" {
+			elements = append(elements, map[string]any{"tag": "markdown", "content": before})
+		}
+		// 将 Markdown 表格转为飞书 table 组件
+		tableElement := mdTableToCardTable(content[loc[0]:loc[1]])
+		if tableElement != nil {
+			elements = append(elements, tableElement)
+		} else {
+			// 解析失败时回退到 markdown 原文
+			elements = append(elements, map[string]any{"tag": "markdown", "content": content[loc[0]:loc[1]]})
+		}
+		lastEnd = loc[1]
+	}
+	// 表格后的文字
+	remaining := strings.TrimSpace(content[lastEnd:])
+	if remaining != "" {
+		elements = append(elements, map[string]any{"tag": "markdown", "content": remaining})
+	}
+	return elements
+}
+
+// mdTableToCardTable 将 Markdown 表格文本解析为飞书 Card table 组件
+// 输入示例:
+//
+//	| 标的 | 今日收盘 | 明日涨跌 |
+//	|:---:|:---:|:---:|
+//	| 黄金 | ¥36.49 | 65% |
+//
+// 输出: {"tag": "table", "columns": [...], "rows": [...]}
+func mdTableToCardTable(mdTable string) map[string]any {
+	lines := strings.Split(strings.TrimSpace(mdTable), "\n")
+	if len(lines) < 3 {
+		return nil // 至少需要: header + separator + 1 data row
+	}
+
+	// 解析表头
+	headerCells := parseTableRow(lines[0])
+	if len(headerCells) == 0 {
+		return nil
+	}
+
+	// lines[1] 是分隔符行 (|---|---|---| )，跳过
+
+	// 构建 columns
+	columns := make([]map[string]any, len(headerCells))
+	for i, cell := range headerCells {
+		columns[i] = map[string]any{
+			"name":         fmt.Sprintf("col_%d", i),
+			"display_name": cell,
+			"data_type":    "lark_md",
+			"width":        "auto",
+		}
+	}
+
+	// 构建 rows
+	var rows []map[string]any
+	for _, line := range lines[2:] {
+		cells := parseTableRow(line)
+		if len(cells) == 0 {
+			continue
+		}
+		row := make(map[string]any)
+		for i := range columns {
+			if i < len(cells) {
+				row[fmt.Sprintf("col_%d", i)] = cells[i]
+			} else {
+				row[fmt.Sprintf("col_%d", i)] = ""
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	if len(rows) == 0 {
+		return nil
+	}
+
+	// 动态设置 page_size：行数不超过 10 行时全部显示
+	pageSize := len(rows)
+	if pageSize > 10 {
+		pageSize = 10
+	}
+
+	return map[string]any{
+		"tag":        "table",
+		"page_size":  pageSize,
+		"row_height": "auto",
+		"header_style": map[string]any{
+			"text_align":       "center",
+			"text_size":        "normal",
+			"background_style": "grey",
+			"bold":             true,
+		},
+		"columns": columns,
+		"rows":    rows,
+	}
+}
+
+// parseTableRow 解析 Markdown 表格的一行，返回各单元格内容 (去除首尾空白)
+// 输入: "| 黄金 | ¥36.49 | 65% |"
+// 输出: ["黄金", "¥36.49", "65%"]
+func parseTableRow(line string) []string {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "|") || !strings.HasSuffix(line, "|") {
+		return nil
+	}
+	// 去掉首尾的 |
+	line = line[1 : len(line)-1]
+	parts := strings.Split(line, "|")
+	var cells []string
+	for _, p := range parts {
+		cells = append(cells, strings.TrimSpace(p))
+	}
+	return cells
+}
+
+// sendCard 发送或回复一张卡片消息，返回新消息的 message_id
+func (f *FeishuChannel) sendCard(ctx context.Context, receiveIDType, chatID, replyTo, content string) (string, error) {
+	card := f.buildCardElements(content)
+	cardJSON, _ := json.Marshal(card)
+
+	if replyTo != "" {
+		resp, err := f.client.Im.Message.Reply(ctx,
+			larkim.NewReplyMessageReqBuilder().
+				MessageId(replyTo).
+				Body(larkim.NewReplyMessageReqBodyBuilder().
+					MsgType("interactive").
+					Content(string(cardJSON)).
+					Build()).
+				Build())
+		if err != nil {
+			return "", fmt.Errorf("回复飞书消息失败: %w", err)
+		}
+		if !resp.Success() {
+			return "", fmt.Errorf("回复飞书消息失败: code=%d msg=%s", resp.Code, resp.Msg)
+		}
+		if resp.Data != nil && resp.Data.MessageId != nil {
+			return *resp.Data.MessageId, nil
+		}
+		return replyTo, nil
+	}
+
+	resp, err := f.client.Im.Message.Create(ctx,
+		larkim.NewCreateMessageReqBuilder().
+			ReceiveIdType(receiveIDType).
+			Body(larkim.NewCreateMessageReqBodyBuilder().
+				ReceiveId(chatID).
+				MsgType("interactive").
+				Content(string(cardJSON)).
+				Build()).
+			Build())
+	if err != nil {
+		return "", fmt.Errorf("发送飞书消息失败: %w", err)
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("发送飞书消息失败: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data != nil && resp.Data.MessageId != nil {
+		return *resp.Data.MessageId, nil
+	}
+	return "", nil
+}
+
+// splitContentByTables 按表格边界拆分内容，每段最多包含 5 张表格
+// 避免触发飞书 card table number over limit (ErrCode 11310)
+func splitContentByTables(content string) []string {
+	locs := tableRE.FindAllStringIndex(content, -1)
+	if len(locs) <= 5 {
+		return []string{content}
+	}
+
+	var parts []string
+	segStart := 0
+	tableCount := 0
+
+	for i, loc := range locs {
+		tableCount++
+		// 当数到第 5 个表格时，进行截断
+		if tableCount == 5 {
+			part := strings.TrimSpace(content[segStart:loc[1]])
+			if part != "" {
+				parts = append(parts, part)
+			}
+			segStart = loc[1]
+			tableCount = 0
+		} else if i == len(locs)-1 {
+			// 最后一个表格，如果有剩余内容则拼接
+			remaining := strings.TrimSpace(content[segStart:])
+			if remaining != "" {
+				parts = append(parts, remaining)
+			}
+		}
+	}
+
+	// 处理如果最后一段没有表格但有普通文本的情况
+	if segStart < len(content) && tableCount == 0 {
+		remaining := strings.TrimSpace(content[segStart:])
+		if remaining != "" {
+			parts = append(parts, remaining)
+		}
+	}
+
+	return parts
 }
 
 // isImageExt 判断是否是图片扩展名

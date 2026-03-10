@@ -2,6 +2,7 @@
 nanobot
 go-nanobot
 pp-claw
+build/
 *.exe
 
 # Go

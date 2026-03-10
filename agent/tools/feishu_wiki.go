@@ -1,4 +1,4 @@
-//go:build amd64 || arm64 || riscv64 || mips64 || ppc64
+//go:build amd64 || arm64 || riscv64 || mips64 || mips64le || ppc64
 
 package tools
 
@@ -314,9 +314,9 @@ func (t *FeishuWikiTool) search(ctx context.Context, params map[string]any) (str
 	}
 	if !resp.Success() {
 		// token 可能已失效
-		if resp.Code == 99991668 || resp.Code == 99991672 {
+		if resp.Code == 99991668 || resp.Code == 99991672 || resp.Code == 99991679 {
 			authURL := t.TokenManager.GetAuthURL(t.OAuthRedirectURL)
-			return fmt.Sprintf("用户授权已失效，请重新授权：\n\n%s", authURL), nil
+			return fmt.Sprintf("用户授权已失效或权限不足，请重新授权：\n\n%s", authURL), nil
 		}
 		return "", fmt.Errorf("search failed: code=%d msg=%s", resp.Code, resp.Msg)
 	}

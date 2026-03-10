@@ -183,6 +183,9 @@ type FeishuConfig struct {
 	DocsEnabled       bool     `yaml:"docs_enabled"`
 	OAuthRedirectURL  string   `yaml:"oauth_redirect_url"`  // OAuth 回调地址，复用 gateway 端口，如 http://localhost:18790/feishu/oauth/callback
 	SearchMaxResults  int      `yaml:"search_max_results"`   // 搜索后自动读取的文档数量，默认 3
+	AilyAppID         string   `yaml:"aily_app_id"`          // 飞书智能伙伴 App ID (如 spring_xxx__c)
+	AilyDataAssetIDs    []string `yaml:"aily_data_asset_ids"`    // Aily 数据知识 ID 列表
+	AilyDataAssetTagIDs []string `yaml:"aily_data_asset_tag_ids"` // Aily 数据知识分类 ID 列表
 }
 
 type DingTalkConfig struct {

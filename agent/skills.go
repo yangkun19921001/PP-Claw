@@ -1,13 +1,52 @@
 package agent
 
 import (
+	"embed"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 )
+
+// 内嵌资源 FS (由 main 包通过 SetEmbeddedAssets 注册)
+var (
+	embeddedSkillsFS    embed.FS
+	embeddedTemplatesFS embed.FS
+	hasEmbeddedAssets   bool
+)
+
+// SetEmbeddedAssets 注册内嵌资源 (在 main 中调用)
+func SetEmbeddedAssets(skills, templates embed.FS) {
+	embeddedSkillsFS = skills
+	embeddedTemplatesFS = templates
+	hasEmbeddedAssets = true
+}
+
+// 版本信息 (由 main 包 ldflags 注入后通过 SetVersionInfo 设置)
+var (
+	versionInfo   = "dev"
+	commitInfo    = "unknown"
+	buildTimeInfo = "unknown"
+)
+
+// SetVersionInfo 设置版本信息 (在 main 中调用)
+func SetVersionInfo(version, commit, buildTime string) {
+	versionInfo = version
+	commitInfo = commit
+	buildTimeInfo = buildTime
+}
+
+// GetVersion 获取版本号
+func GetVersion() string { return versionInfo }
+
+// GetCommit 获取 Git commit
+func GetCommit() string { return commitInfo }
+
+// GetBuildTime 获取构建时间
+func GetBuildTime() string { return buildTimeInfo }
 
 // SkillsLoader 技能加载器 (对标 pp-claw/agent/skills.py:SkillsLoader)
 type SkillsLoader struct {
@@ -38,10 +77,10 @@ func NewSkillsLoader(workspace string) *SkillsLoader {
 type SkillInfo struct {
 	Name   string
 	Path   string
-	Source string // "workspace" or "builtin"
+	Source string // "workspace", "builtin", or "embedded"
 }
 
-// ListSkills 列出所有技能 (对标 skills.py:list_skills, 支持 builtin 技能)
+// ListSkills 列出所有技能 (支持 workspace + builtin + embedded 三级优先级)
 func (l *SkillsLoader) ListSkills() []SkillInfo {
 	var skills []SkillInfo
 	knownNames := make(map[string]bool)
@@ -78,6 +117,27 @@ func (l *SkillsLoader) ListSkills() []SkillInfo {
 						Path:   skillFile,
 						Source: "builtin",
 					})
+					knownNames[e.Name()] = true
+				}
+			}
+		}
+	}
+
+	// 内嵌技能 (最低优先级 — 仅当 workspace 和 builtin 都没有时使用)
+	if hasEmbeddedAssets {
+		if entries, err := fs.ReadDir(embeddedSkillsFS, "skills"); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() || knownNames[e.Name()] {
+					continue
+				}
+				skillPath := "skills/" + e.Name() + "/SKILL.md"
+				if _, err := fs.Stat(embeddedSkillsFS, skillPath); err == nil {
+					skills = append(skills, SkillInfo{
+						Name:   e.Name(),
+						Path:   "embedded://skills/" + e.Name() + "/SKILL.md",
+						Source: "embedded",
+					})
+					knownNames[e.Name()] = true
 				}
 			}
 		}
@@ -86,7 +146,7 @@ func (l *SkillsLoader) ListSkills() []SkillInfo {
 	return skills
 }
 
-// LoadSkill 加载技能内容 (对标 skills.py:load_skill, 支持 workspace + builtin)
+// LoadSkill 加载技能内容 (支持 workspace + builtin + embedded)
 func (l *SkillsLoader) LoadSkill(name string) string {
 	// 先检查 workspace
 	skillFile := filepath.Join(l.workspaceSkills, name, "SKILL.md")
@@ -98,6 +158,14 @@ func (l *SkillsLoader) LoadSkill(name string) string {
 	if l.builtinSkills != "" {
 		builtinFile := filepath.Join(l.builtinSkills, name, "SKILL.md")
 		data, err = os.ReadFile(builtinFile)
+		if err == nil {
+			return string(data)
+		}
+	}
+	// 最后检查 embedded
+	if hasEmbeddedAssets {
+		embeddedPath := "skills/" + name + "/SKILL.md"
+		data, err = fs.ReadFile(embeddedSkillsFS, embeddedPath)
 		if err == nil {
 			return string(data)
 		}
@@ -255,6 +323,40 @@ func (l *SkillsLoader) checkRequirements(meta map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// ExtractEmbeddedSkills 将内嵌技能释放到目标目录 (用于需要文件系统路径的场景)
+func ExtractEmbeddedSkills(targetDir string) error {
+	if !hasEmbeddedAssets {
+		return nil
+	}
+	return fs.WalkDir(embeddedSkillsFS, "skills", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // 忽略错误，继续遍历
+		}
+		// 目标路径: 去掉 "skills/" 前缀后拼接到 targetDir
+		rel := strings.TrimPrefix(path, "skills/")
+		if rel == "" || rel == "." {
+			return nil
+		}
+		targetPath := filepath.Join(targetDir, rel)
+
+		if d.IsDir() {
+			return os.MkdirAll(targetPath, 0755)
+		}
+
+		// 如果文件已存在则跳过 (不覆盖用户修改)
+		if _, err := os.Stat(targetPath); err == nil {
+			return nil
+		}
+
+		data, err := fs.ReadFile(embeddedSkillsFS, path)
+		if err != nil {
+			return nil
+		}
+		os.MkdirAll(filepath.Dir(targetPath), 0755)
+		return os.WriteFile(targetPath, data, 0644)
+	})
 }
 
 // stripFrontmatter 移除 YAML frontmatter

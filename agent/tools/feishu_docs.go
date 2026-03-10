@@ -1,4 +1,4 @@
-//go:build amd64 || arm64 || riscv64 || mips64 || ppc64
+//go:build amd64 || arm64 || riscv64 || mips64 || mips64le || ppc64
 
 package tools
 

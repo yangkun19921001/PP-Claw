@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/base64"
 	"fmt"
+	"io/fs"
 	"mime"
 	"os"
 	"path/filepath"
@@ -105,7 +106,11 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
 }
 
 // loadBootstrapFiles 加载引导文件 (对标 context.py:_load_bootstrap_files)
+// 如果文件不存在，自动从内嵌资源释放到 workspace
 func (c *ContextBuilder) loadBootstrapFiles() string {
+	// 首次启动: 从 embedded 释放 templates 到 workspace
+	c.ensureBootstrapFiles()
+
 	var parts []string
 	for _, filename := range BootstrapFiles {
 		path := filepath.Join(c.Workspace, filename)
@@ -119,6 +124,40 @@ func (c *ContextBuilder) loadBootstrapFiles() string {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// ensureBootstrapFiles 确保引导文件存在
+// 如果 workspace 中不存在，从内嵌的 templates/ 释放
+func (c *ContextBuilder) ensureBootstrapFiles() {
+	if !hasEmbeddedAssets {
+		return
+	}
+
+	for _, filename := range BootstrapFiles {
+		targetPath := filepath.Join(c.Workspace, filename)
+		// 如果已存在则跳过 (不覆盖用户修改)
+		if _, err := os.Stat(targetPath); err == nil {
+			continue
+		}
+		// 从 embedded templates 读取
+		embeddedPath := "templates/" + filename
+		data, err := fs.ReadFile(embeddedTemplatesFS, embeddedPath)
+		if err != nil {
+			continue
+		}
+		// 确保目录存在
+		os.MkdirAll(filepath.Dir(targetPath), 0755)
+		os.WriteFile(targetPath, data, 0644)
+	}
+
+	// 释放 memory/MEMORY.md 模板
+	memoryTarget := filepath.Join(c.Workspace, "memory", "MEMORY.md")
+	if _, err := os.Stat(memoryTarget); err != nil {
+		if data, err := fs.ReadFile(embeddedTemplatesFS, "templates/memory/MEMORY.md"); err == nil {
+			os.MkdirAll(filepath.Dir(memoryTarget), 0755)
+			os.WriteFile(memoryTarget, data, 0644)
+		}
+	}
 }
 
 // getMemoryContext 获取记忆上下文

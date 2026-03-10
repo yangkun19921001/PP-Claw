@@ -4,6 +4,7 @@
 # Binaries
 nanobot
 go-nanobot
+build/
 *.exe
 
 # Dependencies

@@ -152,7 +152,7 @@ func (l *AgentLoop) registerDefaultTools() {
 	}
 
 	// 飞书知识库和文档工具
-	if l.cfg.Channels.Feishu.Enabled && (l.cfg.Channels.Feishu.WikiEnabled || l.cfg.Channels.Feishu.DocsEnabled) {
+	if l.cfg.Channels.Feishu.Enabled && (l.cfg.Channels.Feishu.WikiEnabled || l.cfg.Channels.Feishu.DocsEnabled || l.cfg.Channels.Feishu.AilyAppID != "") {
 		searchMax := l.cfg.Channels.Feishu.SearchMaxResults
 		if searchMax <= 0 {
 			searchMax = 3
@@ -163,11 +163,14 @@ func (l *AgentLoop) registerDefaultTools() {
 			oauthRedirect = fmt.Sprintf("http://localhost:%d/feishu/oauth/callback", l.cfg.Gateway.Port)
 		}
 		feishuTools := tools.CreateFeishuTools(&tools.FeishuToolsConfig{
-			AppID:            l.cfg.Channels.Feishu.AppID,
-			AppSecret:        l.cfg.Channels.Feishu.AppSecret,
-			OAuthRedirectURL: oauthRedirect,
-			SearchMaxResults: searchMax,
-			Logger:           l.logger,
+			AppID:               l.cfg.Channels.Feishu.AppID,
+			AppSecret:           l.cfg.Channels.Feishu.AppSecret,
+			OAuthRedirectURL:    oauthRedirect,
+			SearchMaxResults:    searchMax,
+			Logger:              l.logger,
+			AilyAppID:           l.cfg.Channels.Feishu.AilyAppID,
+			AilyDataAssetIDs:    l.cfg.Channels.Feishu.AilyDataAssetIDs,
+			AilyDataAssetTagIDs: l.cfg.Channels.Feishu.AilyDataAssetTagIDs,
 		})
 		for _, ft := range feishuTools {
 			l.tools.Register(ft)

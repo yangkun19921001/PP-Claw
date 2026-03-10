@@ -9,6 +9,10 @@ type FeishuToolsConfig struct {
 	OAuthRedirectURL string
 	SearchMaxResults int
 	Logger           *zap.Logger
+	// Aily 数据知识问答配置
+	AilyAppID           string
+	AilyDataAssetIDs    []string
+	AilyDataAssetTagIDs []string
 }
 
 // FeishuToolFactory 飞书工具工厂函数类型
@@ -25,7 +29,9 @@ func RegisterFeishuToolFactory(factory FeishuToolFactory) {
 func CreateFeishuTools(cfg *FeishuToolsConfig) []Tool {
 	var result []Tool
 	for _, f := range feishuToolFactories {
-		result = append(result, f(cfg))
+		if t := f(cfg); t != nil {
+			result = append(result, t)
+		}
 	}
 	return result
 }

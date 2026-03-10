@@ -67,7 +67,7 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Show pp-claw version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("🦞 pp-claw v0.1.0")
+			fmt.Printf("🦞 pp-claw %s (%s) built %s\n", agent.GetVersion(), agent.GetCommit(), agent.GetBuildTime())
 		},
 	}
 }
