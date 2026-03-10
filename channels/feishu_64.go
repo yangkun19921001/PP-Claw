@@ -198,6 +198,10 @@ func (f *FeishuChannel) Send(msg *bus.OutboundMessage) error {
 			if err := f.sendImage(ctx, receiveIDType, msg.ChatID, mediaPath); err != nil {
 				f.Logger.Error("发送图片失败", zap.Error(err))
 			}
+		} else if isAudioExt(ext) {
+			if err := f.sendAudio(ctx, receiveIDType, msg.ChatID, mediaPath); err != nil {
+				f.Logger.Error("发送语音流失败", zap.Error(err))
+			}
 		} else {
 			if err := f.sendFile(ctx, receiveIDType, msg.ChatID, mediaPath); err != nil {
 				f.Logger.Error("发送文件失败", zap.Error(err))
@@ -295,6 +299,27 @@ func (f *FeishuChannel) sendFile(ctx context.Context, receiveIDType, receiveID, 
 		Body(larkim.NewCreateMessageReqBodyBuilder().
 			ReceiveId(receiveID).
 			MsgType("file").
+			Content(string(content)).
+			Build()).
+		Build()
+
+	_, err = f.client.Im.Message.Create(ctx, req)
+	return err
+}
+
+// sendAudio 上传并发送语音
+func (f *FeishuChannel) sendAudio(ctx context.Context, receiveIDType, receiveID, filePath string) error {
+	fileKey, err := f.uploadFile(ctx, filePath)
+	if err != nil {
+		return err
+	}
+
+	content, _ := json.Marshal(map[string]string{"file_key": fileKey})
+	req := larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType(receiveIDType).
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(receiveID).
+			MsgType("audio").
 			Content(string(content)).
 			Build()).
 		Build()
@@ -659,4 +684,12 @@ func isImageExt(ext string) bool {
 		".bmp": true, ".webp": true, ".ico": true, ".tiff": true, ".tif": true,
 	}
 	return imageExts[ext]
+}
+
+// isAudioExt 判断是否是飞书支持的语音扩展名 (OPUS)
+func isAudioExt(ext string) bool {
+	audioExts := map[string]bool{
+		".opus": true, ".ogg": true,
+	}
+	return audioExts[ext]
 }
