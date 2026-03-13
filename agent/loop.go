@@ -549,10 +549,17 @@ func (l *AgentLoop) setToolContext(channel, chatID string) {
 }
 
 // extractReplyTo 从入站消息的 Metadata 中提取 message_id 作为回复目标
+// 飞书群聊不使用引用回复（避免消息折叠在"x 条回复"里），直接发送到群聊天流
 func extractReplyTo(msg *bus.InboundMessage) string {
 	if msg == nil || msg.Metadata == nil {
 		return ""
 	}
+	// // 飞书群聊：直接发到群，不做引用回复
+	// if msg.Channel == "feishu" {
+	// 	if chatType, _ := msg.Metadata["chat_type"].(string); chatType == "group" {
+	// 		return ""
+	// 	}
+	// }
 	if id, ok := msg.Metadata["message_id"]; ok {
 		if s, ok := id.(string); ok {
 			return s

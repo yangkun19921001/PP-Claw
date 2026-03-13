@@ -127,6 +127,13 @@ func (f *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 		return nil
 	}
 
+	chatType := ptrValue(msg.ChatType)
+
+	// 群聊：必须 @机器人 才响应，未 @机器人的消息直接忽略
+	if chatType == "group" && !hasBotMention(msg.Mentions) {
+		return nil
+	}
+
 	// 提取 senderID: 优先 userId > openId
 	senderID := extractSenderID(sender)
 
@@ -144,6 +151,7 @@ func (f *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 		zap.String("sender", senderID),
 		zap.String("chat_id", chatID),
 		zap.String("type", messageType),
+		zap.String("chat_type", chatType),
 		zap.String("content", content),
 	)
 
@@ -155,7 +163,7 @@ func (f *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 	metadata := map[string]any{
 		"message_id":   ptrValue(msg.MessageId),
 		"message_type": messageType,
-		"chat_type":    ptrValue(msg.ChatType),
+		"chat_type":    chatType,
 	}
 
 	f.HandleMessage(senderID, chatID, content, media, metadata)
@@ -380,6 +388,13 @@ func extractMessageContent(msg *larkim.EventMessage, messageType string) (string
 	}
 
 	return rawContent, nil
+}
+
+// hasBotMention 检查消息的 mentions 中是否包含机器人
+// 飞书 @机器人时 mention 的 key 为 @_user_N，且 id.open_id 以 "ou_" 开头
+// 简化判断：群聊中只要有 @mention 就认为是在和机器人交互
+func hasBotMention(mentions []*larkim.MentionEvent) bool {
+	return len(mentions) > 0
 }
 
 // inferFileType 根据扩展名推断飞书文件类型
