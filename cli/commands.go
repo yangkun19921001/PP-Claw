@@ -3,11 +3,13 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -291,7 +293,7 @@ func cliOutboundHandler(ctx context.Context, msgBus *bus.MessageBus, logger *zap
 			}
 
 			if msg.Content != "" {
-				fmt.Printf("\n🤖 %s\n", msg.Content)
+				fmt.Printf("\n🤖 %s\n", renderInlineImages(msg.Content))
 			}
 			fmt.Print("\n> ")
 		case <-ctx.Done():
@@ -536,7 +538,7 @@ func runAgent(message, sessionID string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(response)
+		fmt.Println(renderInlineImages(response))
 		return nil
 	}
 
@@ -975,3 +977,48 @@ func showStatus() error {
 
 // 确保 json import 被使用
 var _ = json.Marshal
+
+// imageTagRE 匹配 MCP 图片标记 <<IMAGE:/path/to/file>>
+var imageTagRE = regexp.MustCompile(`<<IMAGE:([^>]+)>>`)
+
+// renderInlineImages 将文本中的 <<IMAGE:path>> 标记替换为 iTerm2 内联图片
+// 支持 iTerm2、WezTerm、Kitty 等兼容终端；不支持的终端会显示 "[图片: path]"
+func renderInlineImages(text string) string {
+	return imageTagRE.ReplaceAllStringFunc(text, func(match string) string {
+		subs := imageTagRE.FindStringSubmatch(match)
+		if len(subs) < 2 {
+			return match
+		}
+		imgPath := subs[1]
+
+		data, err := os.ReadFile(imgPath)
+		if err != nil {
+			return fmt.Sprintf("[图片: %s]", imgPath)
+		}
+
+		// 检测终端是否支持 iTerm2 inline image 协议
+		if !supportsInlineImages() {
+			return fmt.Sprintf("[图片: %s]", imgPath)
+		}
+
+		b64 := base64.StdEncoding.EncodeToString(data)
+		// iTerm2 Inline Images Protocol:
+		// ESC ] 1337 ; File=inline=1;width=auto : BASE64 ST
+		return fmt.Sprintf("\033]1337;File=inline=1;width=80;preserveAspectRatio=1:%s\a", b64)
+	})
+}
+
+// supportsInlineImages 检测当前终端是否支持 iTerm2 inline image 协议
+func supportsInlineImages() bool {
+	term := os.Getenv("TERM_PROGRAM")
+	// iTerm2, WezTerm, Mintty 原生支持
+	switch strings.ToLower(term) {
+	case "iterm.app", "wezterm", "mintty":
+		return true
+	}
+	// Kitty 也支持（通过 TERM 环境变量检测）
+	if strings.Contains(os.Getenv("TERM"), "kitty") {
+		return true
+	}
+	return false
+}

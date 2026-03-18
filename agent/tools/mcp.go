@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -51,7 +53,16 @@ func (t *MCPToolWrapper) Execute(ctx context.Context, params map[string]any) (st
 
 	result, err := t.callTool(ctx, params)
 
-	// 检测 session 失效，自动重连并重试一次
+	// 工具调用超时，直接返回，不触发重连
+	if err != nil && errors.Is(err, errToolTimeout) {
+		errMsg := fmt.Sprintf("(MCP tool call timed out after %ds)", t.toolTimeout)
+		if t.logger != nil {
+			t.logger.Warn("MCP tool call timeout", zap.String("tool", t.toolName), zap.Int("timeout", t.toolTimeout))
+		}
+		return errMsg, nil
+	}
+
+	// 检测 session/transport 失效，自动重连并重试一次
 	if err != nil && isSessionInvalidError(err) {
 		if t.logger != nil {
 			t.logger.Warn("MCP session invalid, reconnecting",
@@ -89,9 +100,23 @@ func (t *MCPToolWrapper) Execute(ctx context.Context, params map[string]any) (st
 
 	var parts []string
 	for _, block := range result.Content {
-		if textContent, ok := block.(mcp.TextContent); ok {
-			parts = append(parts, textContent.Text)
-		} else {
+		switch c := block.(type) {
+		case mcp.TextContent:
+			parts = append(parts, c.Text)
+		case mcp.ImageContent:
+			// 将 base64 图片保存为临时文件，返回特殊标记供 CLI 渲染
+			if imgPath, err := saveBase64Image(c.Data, c.MIMEType); err == nil {
+				parts = append(parts, fmt.Sprintf("<<IMAGE:%s>>", imgPath))
+				if t.logger != nil {
+					t.logger.Info("MCP image saved", zap.String("path", imgPath))
+				}
+			} else {
+				parts = append(parts, "(image decode failed)")
+				if t.logger != nil {
+					t.logger.Warn("MCP image decode failed", zap.Error(err))
+				}
+			}
+		default:
 			parts = append(parts, fmt.Sprintf("%v", block))
 		}
 	}
@@ -113,6 +138,9 @@ func (t *MCPToolWrapper) Execute(ctx context.Context, params map[string]any) (st
 	return output, nil
 }
 
+// errToolTimeout 用于区分工具超时和 transport 断开
+var errToolTimeout = fmt.Errorf("tool call timeout")
+
 // callTool 执行实际的 MCP 工具调用
 func (t *MCPToolWrapper) callTool(ctx context.Context, params map[string]any) (*mcp.CallToolResult, error) {
 	client := t.manager.GetClient(t.serverName)
@@ -121,15 +149,20 @@ func (t *MCPToolWrapper) callTool(ctx context.Context, params map[string]any) (*
 	}
 
 	timeout := time.Duration(t.toolTimeout) * time.Second
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	childCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return client.CallTool(ctx, mcp.CallToolRequest{
+	result, err := client.CallTool(childCtx, mcp.CallToolRequest{
 		Params: mcp.CallToolParams{
 			Name:      t.originalName,
 			Arguments: params,
 		},
 	})
+	if err != nil && childCtx.Err() != nil && ctx.Err() == nil {
+		// child context 超时但 parent context 正常 => 工具调用超时，不是 transport 断开
+		return nil, fmt.Errorf("%w: %s", errToolTimeout, err.Error())
+	}
+	return result, err
 }
 
 // isSessionInvalidError 检测是否为 session 失效错误
@@ -141,7 +174,12 @@ func isSessionInvalidError(err error) bool {
 	return strings.Contains(msg, "Invalid session ID") ||
 		strings.Contains(msg, "invalid session") ||
 		strings.Contains(msg, "session not found") ||
-		strings.Contains(msg, "Session not found")
+		strings.Contains(msg, "Session not found") ||
+		strings.Contains(msg, "transport closed") ||
+		strings.Contains(msg, "transport error") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "EOF")
 }
 
 var _ Tool = (*MCPToolWrapper)(nil)
@@ -420,6 +458,36 @@ func (m *MCPManager) Close() {
 	}
 	m.clients = make(map[string]*mcpclient.Client)
 	m.connected = false
+}
+
+// saveBase64Image 将 base64 编码的图片保存到临时文件，返回文件路径
+func saveBase64Image(data, mimeType string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return "", fmt.Errorf("base64 decode: %w", err)
+	}
+
+	ext := ".png"
+	switch {
+	case strings.Contains(mimeType, "jpeg"), strings.Contains(mimeType, "jpg"):
+		ext = ".jpg"
+	case strings.Contains(mimeType, "gif"):
+		ext = ".gif"
+	case strings.Contains(mimeType, "webp"):
+		ext = ".webp"
+	}
+
+	tmpFile, err := os.CreateTemp("", "mcp-image-*"+ext)
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	defer tmpFile.Close()
+
+	if _, err := tmpFile.Write(raw); err != nil {
+		return "", fmt.Errorf("write image: %w", err)
+	}
+
+	return tmpFile.Name(), nil
 }
 
 // IsConnected 检查是否已连接

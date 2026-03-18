@@ -1,0 +1,211 @@
+pp-claw.yaml              
+agents:
+    defaults:
+        workspace: ~/.pp-claw/workspace
+        model: ${MODEL}
+        max_tokens: 8192
+        temperature: 0.1
+        max_tool_iterations: 40
+        memory_window: 100
+channels:
+    send_progress: false
+    send_tool_hints: false
+    telegram:
+        enabled: false
+        token: ""
+        allow_from: []
+        proxy: ""
+        reply_to_message: false
+    discord:
+        enabled: false
+        token: ""
+        allow_from: []
+        gateway_url: ""
+        intents: 0
+    slack:
+        enabled: false
+        mode: ""
+        webhook_path: ""
+        bot_token: ""
+        app_token: ""
+        reply_in_thread: false
+        react_emoji: ""
+        group_policy: ""
+        group_allow_from: []
+        dm:
+            enabled: false
+            policy: ""
+            allow_from: []
+        allow_from: []
+    whatsapp:
+        enabled: false
+        bridge_url: ""
+        bridge_token: ""
+        allow_from: []
+    feishu:
+        enabled: true
+        app_id: ${FEISHU_APP_ID}
+        app_secret: ${FEISHU_APP_SECRET}
+        encrypt_key: ""
+        verification_token: ""
+        allow_from: []
+        wiki_enabled: true
+        docs_enabled: true
+        oauth_redirect_url: "http://localhost:18790/feishu/oauth/callback"
+        search_max_results: 3
+    dingtalk:
+        enabled: false
+        client_id: ""
+        client_secret: ""
+        allow_from: []
+    email:
+        enabled: false
+        consent_granted: false
+        imap_host: ""
+        imap_port: 0
+        imap_username: ""
+        imap_password: ""
+        smtp_host: ""
+        smtp_port: 0
+        smtp_username: ""
+        smtp_password: ""
+        from_address: ""
+        auto_reply_enabled: false
+        poll_interval_seconds: 0
+        mark_seen: false
+        max_body_chars: 0
+        subject_prefix: ""
+        allow_from: []
+    qq:
+        enabled: false
+        app_id: ""
+        secret: ""
+        allow_from: []
+    mochat:
+        enabled: false
+        base_url: ""
+providers:
+    custom:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    anthropic:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    openai:
+        api_key: ${OPENAI_API_KEY}
+        api_base: ""
+        base_url: ${OPENAI_BASE_URL}
+        model: ""
+        extra_headers: {}
+    openrouter:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    deepseek:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    groq:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    zhipu:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    dashscope:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    vllm:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    gemini:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    moonshot:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    minimax:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    aihubmix:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    siliconflow:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    volcengine:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    openai_codex:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+    github_copilot:
+        api_key: ""
+        api_base: ""
+        base_url: ""
+        model: ""
+        extra_headers: {}
+gateway:
+    host: 0.0.0.0
+    port: 18790
+    heartbeat:
+        enabled: true
+        interval_s: 1800
+tools:
+    web:
+        search:
+            api_key: ""
+            max_results: 5
+    exec:
+        timeout: 60
+    restrict_to_workspace: false
+    mcp_servers:
+        remote-exec:
+            url: ""
+        pairat-remote-exec:
+            url: ""
+        chrome-devtools:
+            command: "npx"
+            args: ["chrome-devtools-mcp@latest", "--autoConnect"]
