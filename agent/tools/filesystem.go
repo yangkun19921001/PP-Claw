@@ -8,6 +8,10 @@ import (
 	"strings"
 )
 
+// EmbeddedReader 用于读取 embedded:// 虚拟路径的回调
+// 由 agent 包在初始化时通过 SetEmbeddedReader 注册
+var EmbeddedReader func(path string) ([]byte, error)
+
 // ReadFileTool 读取文件 (对标 pp-claw/agent/tools/filesystem.py:ReadFileTool)
 type ReadFileTool struct {
 	Workspace  string
@@ -32,6 +36,18 @@ func (t *ReadFileTool) Execute(_ context.Context, params map[string]any) (string
 	path, _ := params["path"].(string)
 	if path == "" {
 		return "", fmt.Errorf("path is required")
+	}
+	// 处理内嵌虚拟路径 embedded://skills/<name>/SKILL.md
+	if strings.HasPrefix(path, "embedded://") {
+		if EmbeddedReader == nil {
+			return "", fmt.Errorf("embedded assets not available")
+		}
+		embPath := strings.TrimPrefix(path, "embedded://")
+		data, err := EmbeddedReader(embPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read embedded file: %w", err)
+		}
+		return string(data), nil
 	}
 	fullPath := t.resolvePath(path)
 	if t.AllowedDir != "" && !strings.HasPrefix(fullPath, t.AllowedDir) {
@@ -332,4 +348,3 @@ func lineSimilarityVar(a, b []string) float64 {
 	}
 	return float64(matching) / float64(total)
 }
-

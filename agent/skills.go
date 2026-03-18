@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/yangkun19921001/PP-Claw/agent/tools"
 )
 
 // 内嵌资源 FS (由 main 包通过 SetEmbeddedAssets 注册)
@@ -23,6 +25,11 @@ func SetEmbeddedAssets(skills, templates embed.FS) {
 	embeddedSkillsFS = skills
 	embeddedTemplatesFS = templates
 	hasEmbeddedAssets = true
+
+	// 同步注册 tools.EmbeddedReader，让 read_file 工具能处理 embedded:// 虚拟路径
+	tools.EmbeddedReader = func(path string) ([]byte, error) {
+		return fs.ReadFile(embeddedSkillsFS, path)
+	}
 }
 
 // 版本信息 (由 main 包 ldflags 注入后通过 SetVersionInfo 设置)

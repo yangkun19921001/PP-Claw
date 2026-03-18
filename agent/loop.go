@@ -487,6 +487,12 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 	iter := l.adkRunner.Run(ctx, messages)
 
 	var lastContent string
+
+	// 死循环检测：记录连续相同（工具名+参数）调用次数
+	const maxRepeatErrors = 3
+	lastToolSig := ""
+	repeatCount := 0
+
 	for {
 		event, ok := iter.Next()
 		if !ok {
@@ -509,14 +515,35 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 			if msg.Role == schema.Assistant {
 				content := stripThink(msg.Content)
 
-				// 检测 tool calls → 发送 progress + 日志
+				// 检测 tool calls → 发送 progress + 日志 + 死循环检测
 				if len(msg.ToolCalls) > 0 {
+					// 构造本轮工具调用签名（用于死循环检测）
+					toolSig := ""
 					for _, tc := range msg.ToolCalls {
+						toolSig += tc.Function.Name + ":" + tc.Function.Arguments + "|"
 						l.logger.Info("🤖 Assistant tool call",
 							zap.String("tool", tc.Function.Name),
 							zap.String("args", tc.Function.Arguments),
 						)
 					}
+					// 死循环检测：连续相同签名超过阈值则强制终止
+					if toolSig == lastToolSig {
+						repeatCount++
+						if repeatCount >= maxRepeatErrors {
+							l.logger.Warn("🔄 检测到工具调用死循环，强制终止",
+								zap.String("tool_sig", toolSig),
+								zap.Int("repeat_count", repeatCount),
+							)
+							if lastContent == "" {
+								lastContent = fmt.Sprintf("抱歉，我在尝试执行操作时遇到了重复错误（连续 %d 次相同调用），已自动停止。请检查指令或重试。", repeatCount)
+							}
+							return lastContent, nil
+						}
+					} else {
+						lastToolSig = toolSig
+						repeatCount = 1
+					}
+
 					if onProgress != nil {
 						if content != "" {
 							onProgress(content, false)

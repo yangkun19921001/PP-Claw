@@ -36,7 +36,9 @@ func (t *ExecTool) Parameters() map[string]any {
 func (t *ExecTool) Execute(ctx context.Context, params map[string]any) (string, error) {
 	command, _ := params["command"].(string)
 	if command == "" {
-		return "", fmt.Errorf("command is required")
+		return "", fmt.Errorf("ERROR: 'command' parameter is required and must be a non-empty string. " +
+			"Please provide the shell command to execute, e.g. {\"command\": \"python3 /tmp/script.py\"}. " +
+			"Do NOT retry with empty parameters.")
 	}
 
 	// 安全检查
