@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -19,6 +20,18 @@ import (
 	"github.com/yangkun19921001/PP-Claw/session"
 	"go.uber.org/zap"
 )
+
+// ToolProgressEvent 工具执行进度事件
+type ToolProgressEvent struct {
+	Kind          string // "thought", "tool_start", "tool_done"
+	Content       string
+	ToolCallID    string
+	ToolName      string
+	ToolArgs      string
+	DurationMs    int64
+	Success       bool
+	ResultPreview string
+}
 
 // AgentLoop Agent 循环 (对标 pp-claw/agent/loop.py:AgentLoop)
 type AgentLoop struct {
@@ -384,13 +397,33 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 
 	// 构建 progress 回调
 	replyTo := extractReplyTo(msg)
-	onProgress := func(content string, toolHint bool) {
-		progressMsg := bus.NewOutboundMessage(msg.Channel, msg.ChatID, content)
+	onProgress := func(evt ToolProgressEvent) {
+		progressMsg := bus.NewOutboundMessage(msg.Channel, msg.ChatID, evt.Content)
 		progressMsg.ReplyTo = replyTo
 		progressMsg.Metadata["_progress"] = true
-		if toolHint {
+
+		switch evt.Kind {
+		case "tool_start":
 			progressMsg.Metadata["_tool_hint"] = true
+			progressMsg.Metadata["_tool_call_id"] = evt.ToolCallID
+			progressMsg.Metadata["_tool_name"] = evt.ToolName
+			progressMsg.Metadata["_tool_args"] = evt.ToolArgs
+			progressMsg.Metadata["_tool_status"] = "running"
+		case "tool_done":
+			progressMsg.Metadata["_tool_hint"] = true
+			progressMsg.Metadata["_tool_call_id"] = evt.ToolCallID
+			progressMsg.Metadata["_tool_name"] = evt.ToolName
+			progressMsg.Metadata["_tool_args"] = evt.ToolArgs
+			progressMsg.Metadata["_tool_status"] = "done"
+			progressMsg.Metadata["_tool_duration_ms"] = evt.DurationMs
+			progressMsg.Metadata["_tool_result_preview"] = evt.ResultPreview
+			if !evt.Success {
+				progressMsg.Metadata["_tool_status"] = "error"
+			}
+		default:
+			// "thought" — plain progress text
 		}
+
 		l.bus.PublishOutbound(progressMsg)
 	}
 
@@ -483,7 +516,7 @@ func formatToolHint(toolCalls []schema.ToolCall) string {
 }
 
 // runWithADK 通过 Eino ADK Runner 运行
-func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, onProgress func(content string, toolHint bool)) (string, error) {
+func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, onProgress func(ToolProgressEvent)) (string, error) {
 	iter := l.adkRunner.Run(ctx, messages)
 
 	var lastContent string
@@ -492,6 +525,12 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 	const maxRepeatErrors = 3
 	lastToolSig := ""
 	repeatCount := 0
+
+	// 工具开始时间追踪
+	toolStartTimes := make(map[string]time.Time)
+	// 工具名称追踪（用于 tool_done 事件）
+	toolNames := make(map[string]string)
+	toolArgs := make(map[string]string)
 
 	for {
 		event, ok := iter.Next()
@@ -502,63 +541,176 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 			return "", fmt.Errorf("agent error: %w", event.Err)
 		}
 
-		// 提取 Assistant 消息内容
-		if event.Output != nil && event.Output.MessageOutput != nil {
-			msg, msgErr := event.Output.MessageOutput.GetMessage()
-			if msgErr != nil {
-				continue
-			}
-			if msg == nil {
-				continue
-			}
+		// 提取消息内容
+		if event.Output == nil || event.Output.MessageOutput == nil {
+			continue
+		}
 
-			if msg.Role == schema.Assistant {
-				content := stripThink(msg.Content)
+		mv := event.Output.MessageOutput
+		// 使用 MessageVariant.Role 作为主要角色判断（比内部 msg.Role 更可靠）
+		role := mv.Role
 
-				// 检测 tool calls → 发送 progress + 日志 + 死循环检测
-				if len(msg.ToolCalls) > 0 {
-					// 构造本轮工具调用签名（用于死循环检测）
-					toolSig := ""
-					for _, tc := range msg.ToolCalls {
-						toolSig += tc.Function.Name + ":" + tc.Function.Arguments + "|"
-						l.logger.Info("🤖 Assistant tool call",
-							zap.String("tool", tc.Function.Name),
-							zap.String("args", tc.Function.Arguments),
+		msg, msgErr := mv.GetMessage()
+		if msgErr != nil {
+			l.logger.Warn("GetMessage error", zap.Error(msgErr), zap.String("role", string(role)))
+			continue
+		}
+		if msg == nil {
+			continue
+		}
+
+		l.logger.Debug("ADK event",
+			zap.String("mv_role", string(role)),
+			zap.String("msg_role", string(msg.Role)),
+			zap.String("tool_call_id", msg.ToolCallID),
+			zap.String("tool_name", msg.ToolName),
+			zap.Int("tool_calls", len(msg.ToolCalls)),
+		)
+
+		switch role {
+		case schema.Assistant:
+			content := stripThink(msg.Content)
+
+			// 检测 tool calls → 发送 progress + 日志 + 死循环检测
+			if len(msg.ToolCalls) > 0 {
+				// 构造本轮工具调用签名（用于死循环检测）
+				toolSig := ""
+				for _, tc := range msg.ToolCalls {
+					toolSig += tc.Function.Name + ":" + tc.Function.Arguments + "|"
+					l.logger.Info("🤖 Assistant tool call",
+						zap.String("tool", tc.Function.Name),
+						zap.String("args", tc.Function.Arguments),
+						zap.String("call_id", tc.ID),
+					)
+					// 记录工具开始时间（使用 tool name 作为 fallback key）
+					key := tc.ID
+					if key == "" {
+						key = tc.Function.Name
+					}
+					toolStartTimes[key] = time.Now()
+					toolNames[key] = tc.Function.Name
+					toolArgs[key] = tc.Function.Arguments
+				}
+				// 死循环检测：连续相同签名超过阈值则强制终止
+				if toolSig == lastToolSig {
+					repeatCount++
+					if repeatCount >= maxRepeatErrors {
+						l.logger.Warn("🔄 检测到工具调用死循环，强制终止",
+							zap.String("tool_sig", toolSig),
+							zap.Int("repeat_count", repeatCount),
 						)
-					}
-					// 死循环检测：连续相同签名超过阈值则强制终止
-					if toolSig == lastToolSig {
-						repeatCount++
-						if repeatCount >= maxRepeatErrors {
-							l.logger.Warn("🔄 检测到工具调用死循环，强制终止",
-								zap.String("tool_sig", toolSig),
-								zap.Int("repeat_count", repeatCount),
-							)
-							if lastContent == "" {
-								lastContent = fmt.Sprintf("抱歉，我在尝试执行操作时遇到了重复错误（连续 %d 次相同调用），已自动停止。请检查指令或重试。", repeatCount)
-							}
-							return lastContent, nil
+						if lastContent == "" {
+							lastContent = fmt.Sprintf("抱歉，我在尝试执行操作时遇到了重复错误（连续 %d 次相同调用），已自动停止。请检查指令或重试。", repeatCount)
 						}
-					} else {
-						lastToolSig = toolSig
-						repeatCount = 1
+						return lastContent, nil
 					}
-
-					if onProgress != nil {
-						if content != "" {
-							onProgress(content, false)
-						}
-						hint := formatToolHint(msg.ToolCalls)
-						if hint != "" {
-							onProgress(hint, true)
-						}
-					}
+				} else {
+					lastToolSig = toolSig
+					repeatCount = 1
 				}
 
-				if content != "" {
-					lastContent = content
+				if onProgress != nil {
+					if content != "" {
+						onProgress(ToolProgressEvent{
+							Kind:    "thought",
+							Content: content,
+						})
+					}
+					// 发送每个工具的 tool_start 事件
+					for _, tc := range msg.ToolCalls {
+						callID := tc.ID
+						if callID == "" {
+							callID = tc.Function.Name
+						}
+						hint := formatToolHint([]schema.ToolCall{tc})
+						onProgress(ToolProgressEvent{
+							Kind:       "tool_start",
+							Content:    hint,
+							ToolCallID: callID,
+							ToolName:   tc.Function.Name,
+							ToolArgs:   tc.Function.Arguments,
+						})
+					}
 				}
 			}
+
+			if content != "" {
+				lastContent = content
+			}
+
+		case schema.Tool:
+			// 捕获工具执行结果
+			callID := msg.ToolCallID
+			toolName := msg.ToolName
+			// 也检查 MessageVariant.ToolName
+			if toolName == "" {
+				toolName = mv.ToolName
+			}
+			resultContent := msg.Content
+
+			// 如果 callID 为空，尝试用 toolName 作为 fallback key
+			lookupKey := callID
+			if lookupKey == "" {
+				lookupKey = toolName
+			}
+
+			// 如果 ToolName 为空，从追踪 map 中获取
+			if toolName == "" {
+				toolName = toolNames[lookupKey]
+			}
+
+			// 计算耗时
+			var durationMs int64
+			if startTime, found := toolStartTimes[lookupKey]; found {
+				durationMs = time.Since(startTime).Milliseconds()
+				delete(toolStartTimes, lookupKey)
+			}
+
+			// 生成结果预览（截取前 200 字符）
+			preview := resultContent
+			if len(preview) > 200 {
+				preview = preview[:200] + "..."
+			}
+
+			// 判断成功/失败（简单启发式）
+			success := true
+			lowerResult := strings.ToLower(resultContent)
+			if strings.HasPrefix(lowerResult, "error:") || strings.HasPrefix(lowerResult, "failed:") {
+				success = false
+			}
+
+			l.logger.Info("🔧 Tool result",
+				zap.String("tool", toolName),
+				zap.String("call_id", callID),
+				zap.Int64("duration_ms", durationMs),
+				zap.Bool("success", success),
+				zap.String("preview", preview),
+			)
+
+			if onProgress != nil {
+				args := toolArgs[lookupKey]
+				hint := toolName + "()"
+				if args != "" {
+					hint = formatToolHint([]schema.ToolCall{{
+						ID:       callID,
+						Function: schema.FunctionCall{Name: toolName, Arguments: args},
+					}})
+				}
+				onProgress(ToolProgressEvent{
+					Kind:          "tool_done",
+					Content:       hint,
+					ToolCallID:    callID,
+					ToolName:      toolName,
+					ToolArgs:      args,
+					DurationMs:    durationMs,
+					Success:       success,
+					ResultPreview: preview,
+				})
+			}
+
+			// 清理追踪
+			delete(toolNames, lookupKey)
+			delete(toolArgs, lookupKey)
 		}
 	}
 

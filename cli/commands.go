@@ -14,10 +14,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mattn/go-isatty"
+
 	"github.com/spf13/cobra"
 	"github.com/yangkun19921001/PP-Claw/agent"
 	"github.com/yangkun19921001/PP-Claw/bus"
 	"github.com/yangkun19921001/PP-Claw/channels"
+	"github.com/yangkun19921001/PP-Claw/cli/tui"
 	"github.com/yangkun19921001/PP-Claw/config"
 	"github.com/yangkun19921001/PP-Claw/cron"
 	"github.com/yangkun19921001/PP-Claw/providers"
@@ -86,9 +89,27 @@ func newOnboardCmd() *cobra.Command {
 }
 
 // runGateway 启动 Gateway (对标 pp-claw/cli/commands.py gateway 命令)
+// initLogger 创建 logger。toStdout=true 时同时输出到终端和文件，否则只输出到文件（TUI 模式）。
+func initLogger(toStdout bool) *zap.Logger {
+	home, _ := os.UserHomeDir()
+	logPath := home + "/.pp-claw/pp-claw.log"
+	os.MkdirAll(home+"/.pp-claw", 0755)
+
+	cfg := zap.NewDevelopmentConfig()
+	if toStdout {
+		cfg.OutputPaths = []string{"stdout", logPath}
+		cfg.ErrorOutputPaths = []string{"stderr", logPath}
+	} else {
+		cfg.OutputPaths = []string{logPath}
+		cfg.ErrorOutputPaths = []string{logPath}
+	}
+	logger, _ := cfg.Build()
+	return logger
+}
+
 func runGateway() error {
-	// 初始化 Logger
-	logger, _ := zap.NewDevelopment()
+	// Gateway 模式：日志输出到 stdout + 文件
+	logger := initLogger(true)
 	defer logger.Sync()
 
 	logger.Info("🦞 pp-claw starting...")
@@ -103,6 +124,10 @@ func runGateway() error {
 	if err != nil {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
+
+	// 强制为 CLI TUI 开启进度和工具提示，保证在无配置文件时也能看到思考和工具日志
+	cfg.Channels.SendProgress = true
+	cfg.Channels.SendToolHints = true
 
 	// 解析 workspace
 	ws := workspace
@@ -204,69 +229,54 @@ func runGateway() error {
 		}()
 	}
 
-	// 启动 CLI 渠道 (outbound 消费者)
-	go cliOutboundHandler(ctx, msgBus, logger)
+	// 检查是否为交互式终端 (非交互模式，比如 Docker 守护进程，则不启动 TUI)
+	if !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsCygwinTerminal(os.Stdout.Fd()) {
+		logger.Info("Non-interactive mode detected (no TTY), running strictly as a daemon...")
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		<-sigChan
+		logger.Info("Shutdown signal received")
+		cronSvc.Stop()
+		channelMgr.StopAll()
+		agentLoop.Stop()
+		cancel()
+		time.Sleep(200 * time.Millisecond)
+		return nil
+	}
 
-	// 等待启动日志刷出后再显示提示符
-	time.Sleep(50 * time.Millisecond)
-
-	// 信号处理
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// CLI 输入循环 (对标 pp-claw 的 CLI 渠道)
-	fmt.Println("\n🦞 pp-claw ready! Type your message:")
+	// Gateway 模式：传统 CLI（stdin/stdout），不启动 TUI
+	fmt.Println("\n🦞 pp-claw gateway ready!")
+	fmt.Printf("   Model: %s\n", cfg.Agents.Defaults.Model)
+	fmt.Println("   Type your message and press Enter. Type 'exit' to quit.")
 	fmt.Print("\n> ")
 
+	// 启动输出监听
+	go cliOutboundHandler(ctx, msgBus, logger)
+
+	// stdin 输入循环
 	scanner := bufio.NewScanner(os.Stdin)
-	inputChan := make(chan string)
-
-	go func() {
-		for scanner.Scan() {
-			inputChan <- scanner.Text()
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024) // 1MB buffer
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			fmt.Print("> ")
+			continue
 		}
-		close(inputChan)
-	}()
-
-	for {
-		select {
-		case input, ok := <-inputChan:
-			if !ok {
-				// stdin EOF (e.g. Docker non-interactive mode)
-				// 不退出，改为等待信号
-				logger.Info("stdin closed, waiting for signal to shutdown...")
-				<-sigChan
-				fmt.Println("\n👋 Shutting down...")
-				cronSvc.Stop()
-				channelMgr.StopAll()
-				agentLoop.Stop()
-				cancel()
-				return nil
-			}
-			input = strings.TrimSpace(input)
-			if input == "" {
-				fmt.Print("> ")
-				continue
-			}
-			if input == "exit" || input == "quit" {
-				fmt.Println("👋 Goodbye!")
-				cancel()
-				return nil
-			}
-
-			// 发送到消息总线
-			msg := bus.NewInboundMessage("cli", "user", "direct", input)
-			msgBus.PublishInbound(msg)
-
-		case <-sigChan:
-			fmt.Println("\n👋 Shutting down...")
-			cronSvc.Stop()
-			channelMgr.StopAll()
-			agentLoop.Stop()
-			cancel()
-			return nil
+		if line == "exit" || line == "quit" {
+			break
 		}
+		inbound := bus.NewInboundMessage("cli", "user", "direct", line)
+		msgBus.PublishInbound(inbound)
 	}
+
+	fmt.Println("\n👋 Shutting down gateway...")
+	cronSvc.Stop()
+	channelMgr.StopAll()
+	agentLoop.Stop()
+	cancel()
+	time.Sleep(200 * time.Millisecond)
+
+	return nil
 }
 
 // cliOutboundHandler CLI 出站消息处理
@@ -340,83 +350,38 @@ func runOnboard() error {
 		return nil
 	}
 
-	reader := bufio.NewReader(os.Stdin)
-
 	fmt.Println("🦞 Welcome to pp-claw!")
 	fmt.Println("Let's set up your configuration.")
 	fmt.Println()
 
-	// ── Step 1: 选择 Provider ──
-	fmt.Println("Select your LLM provider:")
-	fmt.Println()
+	// 映射到 TUI 配置格式
+	var tuiProviders []tui.ProviderOption
 	for _, p := range onboardProviders {
-		fmt.Printf("  %2s) %-28s  e.g. %s\n", p.number, p.label, p.hint)
-	}
-	fmt.Println()
-	fmt.Print("Enter number [3]: ")
-	choiceStr, _ := reader.ReadString('\n')
-	choiceStr = strings.TrimSpace(choiceStr)
-	if choiceStr == "" {
-		choiceStr = "3" // 默认 DeepSeek
+		tuiProviders = append(tuiProviders, tui.ProviderOption{
+			Name:  p.name,
+			Label: p.label,
+			Hint:  p.hint,
+		})
 	}
 
-	// 查找选择的 Provider
-	var chosen struct {
-		name  string
-		label string
-		hint  string
+	// 启动交互表单
+	chosenName, apiKey, baseURL, model, err := tui.RunOnboardForm(tuiProviders)
+	if err != nil {
+		return fmt.Errorf("表单被取消或发生错误: %w", err)
 	}
-	found := false
+
+	// 查找选择的 Provider 信息以得到其配置
+	var chosenHint, chosenLabel string
 	for _, p := range onboardProviders {
-		if p.number == choiceStr || strings.EqualFold(p.name, choiceStr) {
-			chosen.name = p.name
-			chosen.label = p.label
-			chosen.hint = p.hint
-			found = true
+		if p.name == chosenName {
+			chosenHint = p.hint
+			chosenLabel = p.label
 			break
 		}
 	}
-	if !found {
-		// 尝试当成 provider name
-		chosen.name = "custom"
-		chosen.label = "Custom"
-		chosen.hint = "your-model-name"
-		fmt.Printf("  (unrecognized choice %q, using Custom provider)\n", choiceStr)
-	}
-	fmt.Printf("\n  ✓ Provider: %s\n\n", chosen.label)
 
-	// ── Step 2: API Key ──
-	fmt.Print("Enter API Key: ")
-	apiKey, _ := reader.ReadString('\n')
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		fmt.Println("  (skipped — you can set it later in ~/.pp-claw/pp-claw.yaml)")
-	}
-
-	// ── Step 3: Base URL ──
-	defaultBase := ""
-	// 查找 Provider 默认 base URL
-	spec := providers.FindByName(chosen.name)
-	if spec != nil && spec.DefaultAPIBase != "" {
-		defaultBase = spec.DefaultAPIBase
-	}
-
-	promptBase := "Enter API Base URL"
-	if defaultBase != "" {
-		promptBase += " [" + defaultBase + "]"
-	} else {
-		promptBase += " (press Enter to use provider default)"
-	}
-	fmt.Print(promptBase + ": ")
-	baseURL, _ := reader.ReadString('\n')
-	baseURL = strings.TrimSpace(baseURL)
-
-	// ── Step 4: Model ──
-	fmt.Printf("Enter model name [%s]: ", chosen.hint)
-	model, _ := reader.ReadString('\n')
-	model = strings.TrimSpace(model)
 	if model == "" {
-		model = chosen.hint
+		model = chosenHint
 	}
 
 	// ── 构建配置 ──
@@ -424,11 +389,10 @@ func runOnboard() error {
 	cfg.Agents.Defaults.Model = model
 
 	// 设置 Provider
-	providerCfg := cfg.GetProviderByName(chosen.name)
+	providerCfg := cfg.GetProviderByName(chosenName)
 	if providerCfg == nil {
-		// fallback to custom
 		providerCfg = &cfg.Providers.Custom
-		chosen.name = "custom"
+		chosenName = "custom"
 	}
 	providerCfg.APIKey = apiKey
 	if baseURL != "" {
@@ -450,7 +414,7 @@ func runOnboard() error {
 	fmt.Println("│         ✅ Configuration saved!          │")
 	fmt.Println("└─────────────────────────────────────────┘")
 	fmt.Println()
-	fmt.Printf("  Provider:   %s\n", chosen.label)
+	fmt.Printf("  Provider:   %s\n", chosenLabel)
 	fmt.Printf("  Model:      %s\n", model)
 	if baseURL != "" {
 		fmt.Printf("  Base URL:   %s\n", baseURL)
@@ -492,7 +456,11 @@ func newAgentCmd() *cobra.Command {
 }
 
 func runAgent(message, sessionID string) error {
-	logger, _ := zap.NewDevelopment()
+	// 禁用底层 termenv 库的主动终端颜色探测，彻底断绝乱码泄露
+	os.Setenv("COLORFGBG", "15;0")
+
+	// Agent TUI 模式：日志只输出到文件，防止破坏 TUI 渲染
+	logger := initLogger(false)
 	defer logger.Sync()
 
 	cfgPath := cfgFile
@@ -504,6 +472,10 @@ func runAgent(message, sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
+
+	// 强制为 CLI TUI 开启进度和工具提示，保证能看到思考和工具日志
+	cfg.Channels.SendProgress = true
+	cfg.Channels.SendToolHints = true
 
 	ws := workspace
 	if ws == "" {
@@ -543,34 +515,25 @@ func runAgent(message, sessionID string) error {
 	}
 
 	// 交互模式 (对标 commands.py: agent 无 -m)
-	agentReady := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 检查交互环境
+	if !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsCygwinTerminal(os.Stdout.Fd()) {
+		return fmt.Errorf("interactive agent mode requires a TTY terminal")
+	}
+
 	go func() {
-		agentReady <- struct{}{}
 		if err := agentLoop.Run(ctx); err != nil {
-			logger.Error("Agent loop 退出", zap.Error(err))
+			if ctx.Err() == nil {
+				logger.Error("Agent loop exit with error", zap.Error(err))
+			}
 		}
 	}()
-	<-agentReady
-	// 等待启动日志刷出
-	time.Sleep(50 * time.Millisecond)
 
-	go cliOutboundHandler(ctx, msgBus, logger)
-
-	fmt.Println("\n\xf0\x9f\xa6\x9e pp-claw interactive mode. Type 'exit' to quit.")
-	fmt.Print("\nYou: ")
-
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		input := strings.TrimSpace(scanner.Text())
-		if input == "" {
-			fmt.Print("You: ")
-			continue
-		}
-		if input == "exit" || input == "quit" || input == "/exit" || input == "/quit" {
-			fmt.Println("ð\x9f\x91\x8b Goodbye!")
-			return nil
-		}
-		msgBus.PublishInbound(bus.NewInboundMessage("cli", "user", "direct", input))
+	// 启动 Bubble Tea TUI (阻塞直到退出)
+	if err := tui.RunChat(ctx, msgBus, cancel, cfg.Agents.Defaults.Model); err != nil {
+		return fmt.Errorf("TUI runtime error: %w", err)
 	}
 
 	return nil
