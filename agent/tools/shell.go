@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -56,6 +57,19 @@ func (t *ExecTool) Execute(ctx context.Context, params map[string]any) (string, 
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = t.WorkingDir
+
+	// 创建新进程组，超时时 kill 整个进程组（包括 sh 的子进程如 du、find 等）
+	// 否则 exec.CommandContext 只 kill sh，子进程变孤儿，pipe 不关闭导致 cmd.Run() 永久挂起
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			// 负 PID = kill 整个进程组
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
+	// 安全网：即使进程组 kill 后 pipe 仍未关闭，5 秒后强制关闭 pipe
+	cmd.WaitDelay = 5 * time.Second
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
