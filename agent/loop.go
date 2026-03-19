@@ -303,6 +303,11 @@ func (l *AgentLoop) connectMCP(ctx context.Context) {
 	if len(l.cfg.Tools.MCPServers) > 0 {
 		if err := l.initEinoADK(ctx); err != nil {
 			l.logger.Error("重新初始化 ADK Runner 失败", zap.Error(err))
+		} else {
+			l.logger.Info("MCP 工具注册完成，ADK 已重建",
+				zap.Int("total_tools", len(l.tools.Names())),
+				zap.Strings("tools", l.tools.Names()),
+			)
 		}
 	}
 }
@@ -768,6 +773,9 @@ func stripThink(text string) string {
 
 // ProcessDirect 直接处理消息 (用于 CLI)
 func (l *AgentLoop) ProcessDirect(ctx context.Context, content string) (string, error) {
+	// 确保 MCP 工具已连接（单消息模式不走 Run()，需要在此处连接）
+	l.connectMCP(ctx)
+
 	msg := bus.NewInboundMessage("cli", "user", "direct", content)
 	resp, err := l.processMessage(ctx, msg)
 	if err != nil {
