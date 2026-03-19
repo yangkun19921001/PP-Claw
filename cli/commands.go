@@ -125,10 +125,6 @@ func runGateway() error {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
 
-	// 强制为 CLI TUI 开启进度和工具提示，保证在无配置文件时也能看到思考和工具日志
-	cfg.Channels.SendProgress = true
-	cfg.Channels.SendToolHints = true
-
 	// 解析 workspace
 	ws := workspace
 	if ws == "" {
