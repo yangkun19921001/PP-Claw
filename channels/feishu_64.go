@@ -21,6 +21,17 @@ import (
 	"go.uber.org/zap"
 )
 
+type feishuReferencedMessage struct {
+	MessageID   string
+	RootID      string
+	ParentID    string
+	ThreadID    string
+	MessageType string
+	Content     string
+	Media       []string
+	SenderID    string
+}
+
 // FeishuChannel 飞书渠道 — SDK WebSocket 实现
 type FeishuChannel struct {
 	BaseChannel
@@ -139,7 +150,7 @@ func (f *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 
 	// 提取消息内容和媒体
 	messageType := ptrValue(msg.MessageType)
-	content, media := extractMessageContent(msg, messageType)
+	content, media := extractMessageContent(ptrValue(msg.Content), messageType)
 
 	// 清理 @mention 占位符 (如 "@_user_1 你好" → "你好")
 	if messageType == "text" && content != "" {
@@ -155,15 +166,21 @@ func (f *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 		zap.String("content", content),
 	)
 
-	if content == "" && len(media) == 0 {
-		return nil
-	}
-
 	// 构建 metadata
 	metadata := map[string]any{
 		"message_id":   ptrValue(msg.MessageId),
 		"message_type": messageType,
 		"chat_type":    chatType,
+		"root_id":      ptrValue(msg.RootId),
+		"parent_id":    ptrValue(msg.ParentId),
+		"thread_id":    ptrValue(msg.ThreadId),
+	}
+
+	f.attachReferencedMessages(ctx, msg, metadata)
+	content = buildFeishuInboundContent(content, metadata)
+
+	if content == "" && len(media) == 0 && !hasReferencedMessage(metadata) {
+		return nil
 	}
 
 	f.HandleMessage(senderID, chatID, content, media, metadata)
@@ -360,9 +377,8 @@ func extractSenderID(sender *larkim.EventSender) string {
 	return ""
 }
 
-// extractMessageContent 从消息事件中提取文本内容和媒体附件
-func extractMessageContent(msg *larkim.EventMessage, messageType string) (string, []string) {
-	rawContent := ptrValue(msg.Content)
+// extractMessageContent 从消息内容中提取文本和媒体附件
+func extractMessageContent(rawContent, messageType string) (string, []string) {
 	if rawContent == "" {
 		return "", nil
 	}
@@ -388,6 +404,218 @@ func extractMessageContent(msg *larkim.EventMessage, messageType string) (string
 	}
 
 	return rawContent, nil
+}
+
+func (f *FeishuChannel) attachReferencedMessages(ctx context.Context, msg *larkim.EventMessage, metadata map[string]any) {
+	if msg == nil || metadata == nil {
+		return
+	}
+
+	parentID := ptrValue(msg.ParentId)
+	rootID := ptrValue(msg.RootId)
+
+	if parentID != "" {
+		if quoted, err := f.fetchReferencedMessage(ctx, parentID); err != nil {
+			f.Logger.Warn("查询飞书引用父消息失败", zap.String("parent_id", parentID), zap.Error(err))
+		} else if quoted != nil {
+			metadata["quoted_message"] = quoted.toMap()
+		}
+	}
+
+	if rootID != "" && rootID != parentID {
+		if root, err := f.fetchReferencedMessage(ctx, rootID); err != nil {
+			f.Logger.Warn("查询飞书根消息失败", zap.String("root_id", rootID), zap.Error(err))
+		} else if root != nil {
+			metadata["root_message"] = root.toMap()
+		}
+	}
+}
+
+func (f *FeishuChannel) fetchReferencedMessage(ctx context.Context, messageID string) (*feishuReferencedMessage, error) {
+	if f.client == nil || messageID == "" {
+		return nil, nil
+	}
+
+	resp, err := f.client.Im.Message.Get(ctx,
+		larkim.NewGetMessageReqBuilder().
+			MessageId(messageID).
+			Build())
+	if err != nil {
+		return nil, fmt.Errorf("get message %s: %w", messageID, err)
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("get message %s failed: code=%d msg=%s", messageID, resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || len(resp.Data.Items) == 0 || resp.Data.Items[0] == nil {
+		return nil, nil
+	}
+
+	item := resp.Data.Items[0]
+	content, media := extractMessageContent(ptrValueFromBody(item.Body), ptrValue(item.MsgType))
+	if ptrValue(item.MsgType) == "text" && content != "" {
+		content = mentionRE.ReplaceAllString(content, "")
+		content = strings.TrimSpace(content)
+	}
+
+	return &feishuReferencedMessage{
+		MessageID:   ptrValue(item.MessageId),
+		RootID:      ptrValue(item.RootId),
+		ParentID:    ptrValue(item.ParentId),
+		ThreadID:    ptrValue(item.ThreadId),
+		MessageType: ptrValue(item.MsgType),
+		Content:     content,
+		Media:       media,
+		SenderID:    ptrValueFromSender(item.Sender),
+	}, nil
+}
+
+func (m *feishuReferencedMessage) toMap() map[string]any {
+	if m == nil {
+		return nil
+	}
+	return map[string]any{
+		"message_id":   m.MessageID,
+		"root_id":      m.RootID,
+		"parent_id":    m.ParentID,
+		"thread_id":    m.ThreadID,
+		"message_type": m.MessageType,
+		"content":      m.Content,
+		"media":        m.Media,
+		"sender_id":    m.SenderID,
+	}
+}
+
+func ptrValueFromBody(body *larkim.MessageBody) string {
+	if body == nil {
+		return ""
+	}
+	return ptrValue(body.Content)
+}
+
+func ptrValueFromSender(sender *larkim.Sender) string {
+	if sender == nil {
+		return ""
+	}
+	return ptrValue(sender.Id)
+}
+
+func hasReferencedMessage(metadata map[string]any) bool {
+	if metadata == nil {
+		return false
+	}
+	_, hasQuoted := metadata["quoted_message"]
+	_, hasRoot := metadata["root_message"]
+	return hasQuoted || hasRoot
+}
+
+func buildFeishuInboundContent(content string, metadata map[string]any) string {
+	var parts []string
+
+	if quoted := formatFeishuReferencedBlock("引用消息", metadataMap(metadata, "quoted_message")); quoted != "" {
+		parts = append(parts, quoted)
+	}
+
+	if root := metadataMap(metadata, "root_message"); root != nil {
+		quotedID := metadataNestedString(metadata, "quoted_message", "message_id")
+		rootID := stringValue(root["message_id"])
+		if rootID != "" && rootID != quotedID {
+			if block := formatFeishuReferencedBlock("根消息", root); block != "" {
+				parts = append(parts, block)
+			}
+		}
+	}
+
+	content = strings.TrimSpace(content)
+	if content != "" {
+		parts = append(parts, content)
+	}
+
+	return strings.Join(parts, "\n\n")
+}
+
+func formatFeishuReferencedBlock(title string, data map[string]any) string {
+	if data == nil {
+		return ""
+	}
+
+	var lines []string
+	if messageType := stringValue(data["message_type"]); messageType != "" {
+		lines = append(lines, fmt.Sprintf("[%s]", messageType))
+	}
+	if senderID := stringValue(data["sender_id"]); senderID != "" {
+		lines = append(lines, fmt.Sprintf("发送者: %s", senderID))
+	}
+	if content := truncateFeishuQuotedText(stringValue(data["content"]), 1200); content != "" {
+		lines = append(lines, content)
+	}
+	if media := stringSliceValue(data["media"]); len(media) > 0 {
+		lines = append(lines, fmt.Sprintf("媒体: %s", strings.Join(media, ", ")))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("%s:\n%s", title, strings.Join(lines, "\n"))
+}
+
+func truncateFeishuQuotedText(s string, limit int) string {
+	s = strings.TrimSpace(s)
+	if s == "" || limit <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	return string(runes[:limit]) + "\n[已截断]"
+}
+
+func metadataMap(metadata map[string]any, key string) map[string]any {
+	if metadata == nil {
+		return nil
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return nil
+	}
+	m, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return m
+}
+
+func metadataNestedString(metadata map[string]any, key, field string) string {
+	return stringValue(metadataMap(metadata, key)[field])
+}
+
+func stringValue(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch x := v.(type) {
+	case string:
+		return x
+	default:
+		return fmt.Sprintf("%v", x)
+	}
+}
+
+func stringSliceValue(v any) []string {
+	switch items := v.(type) {
+	case []string:
+		return items
+	case []any:
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			if s := stringValue(item); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // hasBotMention 检查消息的 mentions 中是否包含机器人
