@@ -3,12 +3,15 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
+
+var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 // renderHeader 渲染头部栏
 func renderHeader(modelName string, width int) string {
@@ -230,4 +233,137 @@ func extractFirstArg(args string) string {
 		}
 	}
 	return ""
+}
+
+// ── 鼠标选区相关 ─────────────────────────────────────────
+
+// stripANSI 移除 ANSI 转义序列，返回纯文本
+func stripANSI(s string) string {
+	return ansiEscapeRe.ReplaceAllString(s, "")
+}
+
+// normalizeSelection 确保 start 在 end 之前
+func normalizeSelection(sel textSelection) (startY, startX, endY, endX int) {
+	if sel.startY < sel.endY || (sel.startY == sel.endY && sel.startX <= sel.endX) {
+		return sel.startY, sel.startX, sel.endY, sel.endX
+	}
+	return sel.endY, sel.endX, sel.startY, sel.startX
+}
+
+// extractSelectedText 从渲染内容中提取选区纯文本
+func extractSelectedText(content string, sel textSelection) string {
+	lines := strings.Split(content, "\n")
+	startY, startX, endY, endX := normalizeSelection(sel)
+
+	if startY == endY && startX == endX {
+		return ""
+	}
+
+	var result []string
+	for y := startY; y <= endY; y++ {
+		if y < 0 || y >= len(lines) {
+			continue
+		}
+		plain := stripANSI(lines[y])
+		runes := []rune(plain)
+
+		from, to := 0, len(runes)
+		if y == startY && y == endY {
+			from, to = startX, endX
+		} else if y == startY {
+			from = startX
+		} else if y == endY {
+			to = endX
+		}
+
+		if from < 0 {
+			from = 0
+		}
+		if to > len(runes) {
+			to = len(runes)
+		}
+		if from > to {
+			from = to
+		}
+		result = append(result, string(runes[from:to]))
+	}
+	return strings.Join(result, "\n")
+}
+
+// applySelectionHighlight 在渲染内容上叠加反显高亮
+func applySelectionHighlight(content string, sel textSelection) string {
+	lines := strings.Split(content, "\n")
+	startY, startX, endY, endX := normalizeSelection(sel)
+
+	if startY == endY && startX == endX {
+		return content
+	}
+
+	for y := startY; y <= endY; y++ {
+		if y < 0 || y >= len(lines) {
+			continue
+		}
+		var from, to int
+		if y == startY && y == endY {
+			from, to = startX, endX
+		} else if y == startY {
+			from, to = startX, 999999
+		} else if y == endY {
+			from, to = 0, endX
+		} else {
+			from, to = 0, 999999
+		}
+		lines[y] = highlightLineRange(lines[y], from, to)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// highlightLineRange 在带 ANSI 的行中，对可见字符位置 [from, to) 应用反显
+func highlightLineRange(line string, from, to int) string {
+	if from >= to {
+		return line
+	}
+
+	var result strings.Builder
+	result.Grow(len(line) + 20)
+	visiblePos := 0
+	inEscape := false
+	highlighted := false
+
+	for _, r := range line {
+		if inEscape {
+			result.WriteRune(r)
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEscape = false
+				// reset 序列后重新开启反显，避免中途被取消
+				if highlighted {
+					result.WriteString("\x1b[7m")
+				}
+			}
+			continue
+		}
+		if r == '\x1b' {
+			inEscape = true
+			result.WriteRune(r)
+			continue
+		}
+
+		if visiblePos == from && !highlighted {
+			result.WriteString("\x1b[7m")
+			highlighted = true
+		}
+		if visiblePos == to && highlighted {
+			result.WriteString("\x1b[27m")
+			highlighted = false
+		}
+
+		result.WriteRune(r)
+		visiblePos++
+	}
+
+	if highlighted {
+		result.WriteString("\x1b[27m")
+	}
+
+	return result.String()
 }

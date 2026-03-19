@@ -21,6 +21,15 @@ type ChatMessage struct {
 	IsStreaming bool        // 流式输出中（未完成的 assistant 消息）
 }
 
+// textSelection 鼠标选区状态（坐标为 viewport 内容行/列）
+type textSelection struct {
+	active bool
+	startX int // 起始列（可见字符位置）
+	startY int // 起始行（内容行索引，含滚动偏移）
+	endX   int
+	endY   int
+}
+
 // ToolBlock 单个工具执行块
 type ToolBlock struct {
 	CallID        string

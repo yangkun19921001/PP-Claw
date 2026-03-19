@@ -571,6 +571,14 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 		case schema.Assistant:
 			content := stripThink(msg.Content)
 
+			// 无 tool_call 时也流式推送文本，避免用户只看到 "Thinking..." 然后突然完成
+			if len(msg.ToolCalls) == 0 && content != "" && onProgress != nil {
+				onProgress(ToolProgressEvent{
+					Kind:    "thought",
+					Content: content,
+				})
+			}
+
 			// 检测 tool calls → 发送 progress + 日志 + 死循环检测
 			if len(msg.ToolCalls) > 0 {
 				// 构造本轮工具调用签名（用于死循环检测）

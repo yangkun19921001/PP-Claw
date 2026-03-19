@@ -42,6 +42,10 @@ type chatModel struct {
 	// 流式显示
 	streamingMsgIdx int // 当前流式消息索引，-1 表示无
 
+	// 鼠标选区
+	sel         textSelection
+	lastContent string // 缓存渲染内容，用于文本提取
+
 	// 复制反馈
 	copyFlash     string    // 短暂的复制状态提示
 	copyFlashTime time.Time // 闪烁开始时间
@@ -139,6 +143,9 @@ func initialModel(ctx context.Context, msgBus *bus.MessageBus, cancel func(), mo
 		unsubFunc:       unsub,
 	}
 
+	// 初始化 lastContent，确保鼠标选区在 WindowSizeMsg 之前也有内容可用
+	m.lastContent = renderMessages(m.messages, tr, 80, "")
+
 	return m
 }
 
@@ -172,10 +179,23 @@ func (m *chatModel) waitForMessage() tea.Cmd {
 
 func (m *chatModel) refreshViewport() {
 	content := renderMessages(m.messages, m.glamourParser, m.width, m.spinner.View())
+	m.lastContent = content
+	if m.sel.active {
+		content = applySelectionHighlight(content, m.sel)
+	}
 	m.viewport.SetContent(content)
 	if !m.userScrolledUp {
 		m.viewport.GotoBottom()
 	}
+}
+
+// refreshSelection 仅更新选区高亮，不重新渲染消息（拖拽时性能优化）
+func (m *chatModel) refreshSelection() {
+	content := m.lastContent
+	if m.sel.active {
+		content = applySelectionHighlight(content, m.sel)
+	}
+	m.viewport.SetContent(content)
 }
 
 func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -289,6 +309,57 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textarea.Reset()
 		}
 
+	case tea.MouseMsg:
+		// 动态计算 viewport 在屏幕上的起始行
+		vpStart := lipgloss.Height(renderHeader(m.modelName, m.width))
+		vpEnd := vpStart + m.viewport.Height
+
+		switch {
+		case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
+			// 仅在 viewport 区域内开始选区
+			if msg.Y >= vpStart && msg.Y < vpEnd {
+				contentY := (msg.Y - vpStart) + m.viewport.YOffset
+				m.sel = textSelection{
+					active: true,
+					startX: msg.X, startY: contentY,
+					endX: msg.X, endY: contentY,
+				}
+			}
+
+		case msg.Action == tea.MouseActionMotion && m.sel.active:
+			contentY := (msg.Y - vpStart) + m.viewport.YOffset
+			if contentY < 0 {
+				contentY = 0
+			}
+			m.sel.endX = msg.X
+			m.sel.endY = contentY
+			m.refreshSelection()
+
+		case msg.Action == tea.MouseActionRelease && m.sel.active:
+			contentY := (msg.Y - vpStart) + m.viewport.YOffset
+			if contentY < 0 {
+				contentY = 0
+			}
+			m.sel.endX = msg.X
+			m.sel.endY = contentY
+
+			text := extractSelectedText(m.lastContent, m.sel)
+			m.sel.active = false
+
+			if strings.TrimSpace(text) != "" {
+				if err := copyToClipboard(text); err == nil {
+					m.copyFlash = "Copied!"
+				} else {
+					m.copyFlash = "Copy failed"
+				}
+				m.copyFlashTime = time.Now()
+				cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+					return clearCopyFlashMsg{}
+				}))
+			}
+			m.refreshViewport()
+		}
+
 	case busMsgMsg:
 		if msg.msg == nil {
 			// bus 断开，安全重置 isSubmitting
@@ -353,6 +424,13 @@ func (m *chatModel) handleBusMessage(out *bus.OutboundMessage) {
 	if toolStatus != "" {
 		switch toolStatus {
 		case "running":
+			// 工具开始时，如果有活跃的流式消息，先终结它
+			// 否则后续回复会覆盖工具组之前的位置，导致消息顺序错乱
+			if m.streamingMsgIdx >= 0 && m.streamingMsgIdx < len(m.messages) {
+				m.messages[m.streamingMsgIdx].IsStreaming = false
+				m.streamingMsgIdx = -1
+			}
+
 			tb := &ToolBlock{
 				CallID: lookupKey,
 				Name:   toolName,
@@ -470,7 +548,7 @@ func RunChat(ctx context.Context, msgBus *bus.MessageBus, cancel func(), modelNa
 	m := initialModel(ctx, msgBus, cancel, modelName)
 	defer m.unsubFunc()
 
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
