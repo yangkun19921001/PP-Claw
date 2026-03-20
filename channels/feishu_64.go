@@ -179,6 +179,12 @@ func (f *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 	f.attachReferencedMessages(ctx, msg, metadata)
 	content = buildFeishuInboundContent(content, metadata)
 
+	// 将被引用消息的媒体附件合并到当前消息，使 Agent 能直接访问引用的图片/文件
+	media = mergeReferencedMedia(media, metadata)
+
+	// 下载图片到本地，使 Agent 能直接读取图片内容
+	media = f.downloadMediaItems(ctx, media, ptrValue(msg.MessageId))
+
 	if content == "" && len(media) == 0 && !hasReferencedMessage(metadata) {
 		return nil
 	}
@@ -353,6 +359,61 @@ func (f *FeishuChannel) sendAudio(ctx context.Context, receiveIDType, receiveID,
 	return err
 }
 
+// downloadImage 使用 Lark SDK 下载图片到本地临时文件
+func (f *FeishuChannel) downloadImage(ctx context.Context, messageID, imageKey string) (string, error) {
+	req := larkim.NewGetMessageResourceReqBuilder().
+		MessageId(messageID).
+		FileKey(imageKey).
+		Type("image").
+		Build()
+
+	resp, err := f.client.Im.MessageResource.Get(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("download image %s: %w", imageKey, err)
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("download image %s: code=%d msg=%s", imageKey, resp.Code, resp.Msg)
+	}
+
+	tmpFile, err := os.CreateTemp("", "feishu-img-*.png")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+
+	if err := resp.WriteFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("write image to %s: %w", tmpPath, err)
+	}
+
+	f.Logger.Info("飞书图片下载完成", zap.String("image_key", imageKey), zap.String("path", tmpPath))
+	return tmpPath, nil
+}
+
+// downloadMediaItems 遍历 media 列表，将 "image:xxx" 项下载为本地文件路径
+func (f *FeishuChannel) downloadMediaItems(ctx context.Context, media []string, messageID string) []string {
+	if len(media) == 0 || messageID == "" {
+		return media
+	}
+
+	result := make([]string, 0, len(media))
+	for _, item := range media {
+		if strings.HasPrefix(item, "image:") {
+			imageKey := strings.TrimPrefix(item, "image:")
+			localPath, err := f.downloadImage(ctx, messageID, imageKey)
+			if err != nil {
+				f.Logger.Warn("飞书图片下载失败，跳过", zap.String("image_key", imageKey), zap.Error(err))
+				continue
+			}
+			result = append(result, localPath)
+		} else {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
 // ============ 辅助函数 ============
 
 // ptrValue 安全解引用字符串指针
@@ -401,9 +462,53 @@ func extractMessageContent(rawContent, messageType string) (string, []string) {
 		if fileKey, ok := contentMap["file_key"].(string); ok {
 			return "", []string{"file:" + fileKey}
 		}
+	case "post":
+		return extractPostContent(contentMap)
 	}
 
 	return rawContent, nil
+}
+
+// extractPostContent 从 post 富文本消息中提取文本和图片
+// post JSON 结构: {"title":"...","content":[[{"tag":"img","image_key":"img_v3_xxx",...},{"tag":"text","text":"..."}]]}
+func extractPostContent(contentMap map[string]any) (string, []string) {
+	var texts []string
+	var media []string
+
+	if title, _ := contentMap["title"].(string); title != "" {
+		texts = append(texts, title)
+	}
+
+	contentArr, ok := contentMap["content"].([]any)
+	if !ok {
+		return strings.Join(texts, "\n"), media
+	}
+
+	for _, line := range contentArr {
+		lineArr, ok := line.([]any)
+		if !ok {
+			continue
+		}
+		for _, elem := range lineArr {
+			elemMap, ok := elem.(map[string]any)
+			if !ok {
+				continue
+			}
+			tag, _ := elemMap["tag"].(string)
+			switch tag {
+			case "text":
+				if text, _ := elemMap["text"].(string); text != "" {
+					texts = append(texts, text)
+				}
+			case "img":
+				if imageKey, _ := elemMap["image_key"].(string); imageKey != "" {
+					media = append(media, "image:"+imageKey)
+				}
+			}
+		}
+	}
+
+	return strings.Join(texts, "\n"), media
 }
 
 func (f *FeishuChannel) attachReferencedMessages(ctx context.Context, msg *larkim.EventMessage, metadata map[string]any) {
@@ -456,6 +561,9 @@ func (f *FeishuChannel) fetchReferencedMessage(ctx context.Context, messageID st
 		content = mentionRE.ReplaceAllString(content, "")
 		content = strings.TrimSpace(content)
 	}
+
+	// 用被引用消息自己的 message_id 下载图片（API 要求 message_id 与资源匹配）
+	media = f.downloadMediaItems(ctx, media, ptrValue(item.MessageId))
 
 	return &feishuReferencedMessage{
 		MessageID:   ptrValue(item.MessageId),
@@ -599,6 +707,23 @@ func stringValue(v any) string {
 	default:
 		return fmt.Sprintf("%v", x)
 	}
+}
+
+// mergeReferencedMedia 将被引用消息中的媒体附件合并到当前 media 列表中，去重
+func mergeReferencedMedia(media []string, metadata map[string]any) []string {
+	seen := make(map[string]bool, len(media))
+	for _, m := range media {
+		seen[m] = true
+	}
+	for _, key := range []string{"quoted_message", "root_message"} {
+		for _, m := range stringSliceValue(metadataMap(metadata, key)["media"]) {
+			if !seen[m] {
+				media = append(media, m)
+				seen[m] = true
+			}
+		}
+	}
+	return media
 }
 
 func stringSliceValue(v any) []string {

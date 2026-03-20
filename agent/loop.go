@@ -2,9 +2,13 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -398,7 +402,50 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	if userContentStr == "" {
 		userContentStr = msg.Content
 	}
-	einoMsgs = append(einoMsgs, &schema.Message{Role: schema.User, Content: userContentStr})
+
+	// 构建多模态消息（图片 + 文本）或纯文本消息
+	// Media 由各渠道负责下载为本地文件路径，这里只处理确实存在的本地图片文件
+	var imageParts []schema.MessageInputPart
+	for _, mediaPath := range msg.Media {
+		// 跳过非本地路径（如未下载的 token、URL 等）
+		if _, err := os.Stat(mediaPath); err != nil {
+			continue
+		}
+		// 仅处理图片类型
+		mimeType := mime.TypeByExtension(filepath.Ext(mediaPath))
+		if !strings.HasPrefix(mimeType, "image/") {
+			continue
+		}
+		data, err := os.ReadFile(mediaPath)
+		if err != nil {
+			l.logger.Warn("读取媒体文件失败", zap.String("path", mediaPath), zap.Error(err))
+			continue
+		}
+		b64 := base64.StdEncoding.EncodeToString(data)
+		imageParts = append(imageParts, schema.MessageInputPart{
+			Type: schema.ChatMessagePartTypeImageURL,
+			Image: &schema.MessageInputImage{
+				MessagePartCommon: schema.MessagePartCommon{
+					Base64Data: &b64,
+					MIMEType:   mimeType,
+				},
+			},
+		})
+	}
+
+	if len(imageParts) > 0 {
+		// 图片在前，文本在后
+		parts := append(imageParts, schema.MessageInputPart{
+			Type: schema.ChatMessagePartTypeText,
+			Text: userContentStr,
+		})
+		einoMsgs = append(einoMsgs, &schema.Message{
+			Role:                  schema.User,
+			UserInputMultiContent: parts,
+		})
+	} else {
+		einoMsgs = append(einoMsgs, &schema.Message{Role: schema.User, Content: userContentStr})
+	}
 
 	// 构建 progress 回调
 	replyTo := extractReplyTo(msg)
