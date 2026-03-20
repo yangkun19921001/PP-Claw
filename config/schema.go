@@ -18,12 +18,13 @@ type AgentsConfig struct {
 
 // AgentDefaults 默认 Agent 配置
 type AgentDefaults struct {
-	Workspace         string  `yaml:"workspace"`
-	Model             string  `yaml:"model"`
-	MaxTokens         int     `yaml:"max_tokens"`
-	Temperature       float64 `yaml:"temperature"`
-	MaxToolIterations int     `yaml:"max_tool_iterations"`
-	MemoryWindow      int     `yaml:"memory_window"`
+	Workspace           string  `yaml:"workspace"`
+	Model               string  `yaml:"model"`
+	MaxTokens           int     `yaml:"max_tokens"`
+	Temperature         float64 `yaml:"temperature"`
+	MaxToolIterations   int     `yaml:"max_tool_iterations"`
+	MemoryWindow        int     `yaml:"memory_window"`
+	ContextWindowTokens int     `yaml:"context_window_tokens"` // default 65536
 }
 
 // ChannelsConfig 渠道配置
@@ -39,6 +40,8 @@ type ChannelsConfig struct {
 	Email         EmailConfig    `yaml:"email"`
 	QQ            QQConfig       `yaml:"qq"`
 	Mochat        MochatConfig   `yaml:"mochat"`
+	Wecom         WecomConfig    `yaml:"wecom"`
+	Matrix        MatrixConfig   `yaml:"matrix"`
 }
 
 // ProviderConfig 单个 LLM Provider 配置
@@ -58,25 +61,34 @@ func (p *ProviderConfig) GetEffectiveAPIBase() string {
 	return p.APIBase
 }
 
+// AzureProviderConfig Azure OpenAI Provider 配置
+type AzureProviderConfig struct {
+	APIKey       string `yaml:"api_key"`
+	APIBase      string `yaml:"api_base"`
+	DefaultModel string `yaml:"default_model"`
+	APIVersion   string `yaml:"api_version"` // default "2024-10-21"
+}
+
 // ProvidersConfig 所有 Provider 配置
 type ProvidersConfig struct {
-	Custom        ProviderConfig `yaml:"custom"`
-	Anthropic     ProviderConfig `yaml:"anthropic"`
-	OpenAI        ProviderConfig `yaml:"openai"`
-	OpenRouter    ProviderConfig `yaml:"openrouter"`
-	DeepSeek      ProviderConfig `yaml:"deepseek"`
-	Groq          ProviderConfig `yaml:"groq"`
-	Zhipu         ProviderConfig `yaml:"zhipu"`
-	DashScope     ProviderConfig `yaml:"dashscope"`
-	VLLM          ProviderConfig `yaml:"vllm"`
-	Gemini        ProviderConfig `yaml:"gemini"`
-	Moonshot      ProviderConfig `yaml:"moonshot"`
-	MiniMax       ProviderConfig `yaml:"minimax"`
-	AiHubMix      ProviderConfig `yaml:"aihubmix"`
-	SiliconFlow   ProviderConfig `yaml:"siliconflow"`
-	VolcEngine    ProviderConfig `yaml:"volcengine"`
-	OpenAICodex   ProviderConfig `yaml:"openai_codex"`
-	GithubCopilot ProviderConfig `yaml:"github_copilot"`
+	Custom        ProviderConfig      `yaml:"custom"`
+	Anthropic     ProviderConfig      `yaml:"anthropic"`
+	OpenAI        ProviderConfig      `yaml:"openai"`
+	OpenRouter    ProviderConfig      `yaml:"openrouter"`
+	DeepSeek      ProviderConfig      `yaml:"deepseek"`
+	Groq          ProviderConfig      `yaml:"groq"`
+	Zhipu         ProviderConfig      `yaml:"zhipu"`
+	DashScope     ProviderConfig      `yaml:"dashscope"`
+	VLLM          ProviderConfig      `yaml:"vllm"`
+	Gemini        ProviderConfig      `yaml:"gemini"`
+	Moonshot      ProviderConfig      `yaml:"moonshot"`
+	MiniMax       ProviderConfig      `yaml:"minimax"`
+	AiHubMix      ProviderConfig      `yaml:"aihubmix"`
+	SiliconFlow   ProviderConfig      `yaml:"siliconflow"`
+	VolcEngine    ProviderConfig      `yaml:"volcengine"`
+	OpenAICodex   ProviderConfig      `yaml:"openai_codex"`
+	GithubCopilot ProviderConfig      `yaml:"github_copilot"`
+	AzureOpenAI   AzureProviderConfig `yaml:"azure_openai"`
 }
 
 // GatewayConfig Gateway 配置
@@ -179,6 +191,9 @@ type FeishuConfig struct {
 	EncryptKey          string   `yaml:"encrypt_key"`
 	VerificationToken   string   `yaml:"verification_token"`
 	AllowFrom           []string `yaml:"allow_from"`
+	GroupPolicy         string   `yaml:"group_policy"`      // "open"/"mention", default "mention"
+	ReactEmoji          string   `yaml:"react_emoji"`       // default "THUMBSUP"
+	ReplyToMessage      bool     `yaml:"reply_to_message"`  // reply to the original message
 	WikiEnabled         bool     `yaml:"wiki_enabled"`
 	DocsEnabled         bool     `yaml:"docs_enabled"`
 	OAuthRedirectURL    string   `yaml:"oauth_redirect_url"`      // OAuth 回调地址，复用 gateway 端口，如 http://localhost:18790/feishu/oauth/callback
@@ -228,6 +243,46 @@ type MochatConfig struct {
 	BaseURL string `yaml:"base_url"`
 }
 
+// WecomConfig 企业微信渠道配置
+type WecomConfig struct {
+	Enabled        bool     `yaml:"enabled"`
+	BotID          string   `yaml:"bot_id"`
+	Secret         string   `yaml:"secret"`
+	WelcomeMessage string   `yaml:"welcome_message"`
+	AllowFrom      []string `yaml:"allow_from"`
+}
+
+// MatrixConfig Matrix 渠道配置
+type MatrixConfig struct {
+	Enabled        bool     `yaml:"enabled"`
+	Homeserver     string   `yaml:"homeserver"`
+	AccessToken    string   `yaml:"access_token"`
+	UserID         string   `yaml:"user_id"`
+	DeviceID       string   `yaml:"device_id"`
+	E2EEEnabled    bool     `yaml:"e2ee_enabled"`
+	MaxMediaBytes  int      `yaml:"max_media_bytes"`
+	AllowFrom      []string `yaml:"allow_from"`
+	GroupPolicy    string   `yaml:"group_policy"`      // "open"/"mention"/"allowlist"
+	GroupAllowFrom []string `yaml:"group_allow_from"`
+}
+
+// GetEnabledMap 返回 channel_name → enabled 映射，用于动态发现
+func (c *ChannelsConfig) GetEnabledMap() map[string]bool {
+	return map[string]bool{
+		"telegram": c.Telegram.Enabled,
+		"discord":  c.Discord.Enabled,
+		"slack":    c.Slack.Enabled,
+		"feishu":   c.Feishu.Enabled,
+		"dingtalk":  c.DingTalk.Enabled,
+		"whatsapp": c.WhatsApp.Enabled,
+		"email":    c.Email.Enabled,
+		"qq":       c.QQ.Enabled,
+		"mochat":   c.Mochat.Enabled,
+		"wecom":    c.Wecom.Enabled,
+		"matrix":   c.Matrix.Enabled,
+	}
+}
+
 // DefaultConfig 返回默认配置
 func DefaultConfig() *Config {
 	return &Config{
@@ -238,12 +293,16 @@ func DefaultConfig() *Config {
 				MaxTokens:         8192,
 				Temperature:       0.1,
 				MaxToolIterations: 40,
-				MemoryWindow:      100,
+				MemoryWindow:        100,
+				ContextWindowTokens: 65536,
 			},
 		},
 		Channels: ChannelsConfig{
 			SendProgress:  true,
 			SendToolHints: true,
+			Feishu: FeishuConfig{
+				ReplyToMessage: true,
+			},
 		},
 		Gateway: GatewayConfig{
 			Host: "0.0.0.0",

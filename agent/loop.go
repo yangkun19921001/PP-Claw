@@ -62,6 +62,9 @@ type AgentLoop struct {
 	running       bool
 	consolidateMu sync.Mutex // 防止并发合并同一 session
 	cronService   *cron.Service
+
+	// Active task tracking for /stop support
+	activeTasks sync.Map // session_key -> []context.CancelFunc
 }
 
 // AgentLoopConfig 循环配置
@@ -96,7 +99,7 @@ func NewAgentLoop(cfg *AgentLoopConfig) (*AgentLoop, error) {
 		context:       NewContextBuilder(workspace),
 		sessions:      cfg.Sessions,
 		tools:         tools.NewRegistry(logger),
-		subagents:     NewSubagentManager(workspace, cfg.Bus, agentCfg.Model, logger),
+		subagents:     NewSubagentManager(workspace, cfg.Bus, agentCfg.Model, cfg.ChatModel, logger),
 		memory:        NewMemoryStore(workspace, cfg.ChatModel, logger),
 		mcpManager:    tools.NewMCPManager(logger),
 		chatModel:     cfg.ChatModel,
@@ -408,14 +411,24 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	l.setToolContext(msg.Channel, msg.ChatID)
 
 	// 开始新的对话回复回合
+	replyTo := extractReplyTo(msg)
 	if t := l.tools.Get("message"); t != nil {
 		if mt, ok := t.(*tools.MessageTool); ok {
 			mt.StartTurn()
+			mt.SetReplyTo(replyTo)
 		}
+	}
+
+	// Handle system messages (subagent results, etc.)
+	if msg.Channel == "system" {
+		return l.handleSystemMessage(ctx, msg)
 	}
 
 	// 处理斜杠命令
 	cmd := strings.TrimSpace(strings.ToLower(msg.Content))
+	if cmd == "/stop" {
+		return l.handleStop(msg)
+	}
 	if cmd == "/new" {
 		sessionKey := msg.SessionKey()
 		sess := l.sessions.GetOrCreate(sessionKey)
@@ -494,8 +507,7 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 		zap.Int("user_content_length", len(userContentStr)),
 	)
 
-	// 构建 progress 回调
-	replyTo := extractReplyTo(msg)
+	// 构建 progress 回调（replyTo 已在上方定义）
 	onProgress := func(evt ToolProgressEvent) {
 		progressMsg := bus.NewOutboundMessage(msg.Channel, msg.ChatID, evt.Content)
 		progressMsg.ReplyTo = replyTo
@@ -542,7 +554,7 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 		zap.String("trace_id", traceID),
 		zap.String("session_key", sessionKey),
 	)
-	finalContent, err := l.runWithADK(ctx, einoMsgs, onProgress)
+	finalContent, finishReason, err := l.runWithADK(ctx, einoMsgs, onProgress)
 	if err != nil {
 		result = "agent_error"
 		return nil, err
@@ -551,6 +563,7 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 		zap.String("trace_id", traceID),
 		zap.String("session_key", sessionKey),
 		zap.Int("final_content_length", len(finalContent)),
+		zap.String("finish_reason", finishReason),
 	)
 
 	if finalContent == "" {
@@ -570,10 +583,15 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 		zap.String("preview", responsePreview),
 	)
 
-	// 保存会话
-	sess.AddMessage("user", msg.Content)
-	sess.AddMessage("assistant", finalContent)
-	l.sessions.Save(sess)
+	// 保存会话: 错误响应不持久化到 session，避免污染对话历史
+	if finishReason == "error" {
+		l.logger.Warn("消息链路: 错误响应不保存到会话",
+			zap.String("trace_id", traceID),
+			zap.String("session_key", sessionKey),
+		)
+	} else {
+		l.saveTurn(sess, msg.Content, finalContent)
+	}
 	l.logger.Info("消息链路: 会话保存完成",
 		zap.String("trace_id", traceID),
 		zap.String("session_key", sessionKey),
@@ -609,6 +627,177 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	result = "final_response_ready"
 	response = out
 	return response, nil
+}
+
+// handleStop cancels all active tasks for the session and subagents.
+func (l *AgentLoop) handleStop(msg *bus.InboundMessage) (*bus.OutboundMessage, error) {
+	sessionKey := msg.SessionKey()
+	cancelled := 0
+
+	// Cancel active agent tasks for this session
+	if val, ok := l.activeTasks.Load(sessionKey); ok {
+		if cancels, ok := val.([]context.CancelFunc); ok {
+			for _, cancel := range cancels {
+				cancel()
+			}
+			cancelled += len(cancels)
+		}
+		l.activeTasks.Delete(sessionKey)
+	}
+
+	// Cancel subagents for this session
+	if l.subagents != nil {
+		cancelled += l.subagents.CancelBySession(sessionKey)
+	}
+
+	text := fmt.Sprintf("Cancelled %d task(s).", cancelled)
+	if cancelled == 0 {
+		text = "No active tasks to cancel."
+	}
+
+	return bus.NewOutboundMessage(msg.Channel, msg.ChatID, text), nil
+}
+
+// trackTask registers a cancel function for the session.
+func (l *AgentLoop) trackTask(sessionKey string, cancel context.CancelFunc) {
+	val, _ := l.activeTasks.LoadOrStore(sessionKey, []context.CancelFunc{})
+	cancels := val.([]context.CancelFunc)
+	cancels = append(cancels, cancel)
+	l.activeTasks.Store(sessionKey, cancels)
+}
+
+// untrackTask removes a cancel function for the session.
+func (l *AgentLoop) untrackTask(sessionKey string, cancel context.CancelFunc) {
+	val, ok := l.activeTasks.Load(sessionKey)
+	if !ok {
+		return
+	}
+	cancels := val.([]context.CancelFunc)
+	for i, c := range cancels {
+		if &c == &cancel {
+			cancels = append(cancels[:i], cancels[i+1:]...)
+			break
+		}
+	}
+	if len(cancels) == 0 {
+		l.activeTasks.Delete(sessionKey)
+	} else {
+		l.activeTasks.Store(sessionKey, cancels)
+	}
+}
+
+// handleSystemMessage processes system channel messages (subagent results, etc.)
+func (l *AgentLoop) handleSystemMessage(ctx context.Context, msg *bus.InboundMessage) (*bus.OutboundMessage, error) {
+	// Parse "channel:chatID" from ChatID field
+	parts := strings.SplitN(msg.ChatID, ":", 2)
+	if len(parts) != 2 {
+		l.logger.Warn("系统消息格式错误", zap.String("chat_id", msg.ChatID))
+		return nil, nil
+	}
+	targetChannel := parts[0]
+	targetChatID := parts[1]
+
+	// Determine the role: subagent results as assistant, others as user
+	role := "user"
+	if msg.SenderID == "subagent" {
+		role = "assistant"
+	}
+
+	// Get/create session for the target
+	sessionKey := targetChannel + ":" + targetChatID
+	sess := l.sessions.GetOrCreate(sessionKey)
+
+	// Add the system message to session history
+	sess.AddMessage(role, msg.Content)
+	l.sessions.Save(sess)
+
+	// Build and run through agent loop to generate response
+	history := sess.GetHistory(l.memoryWindow)
+	var einoMsgs []*schema.Message
+	einoMsgs = append(einoMsgs, &schema.Message{
+		Role:    schema.System,
+		Content: l.context.BuildSystemPrompt(),
+	})
+
+	for _, h := range history {
+		hRole, _ := h["role"].(string)
+		content, _ := h["content"].(string)
+		var schemaRole schema.RoleType
+		switch hRole {
+		case "user":
+			schemaRole = schema.User
+		case "assistant":
+			schemaRole = schema.Assistant
+		default:
+			continue
+		}
+		einoMsgs = append(einoMsgs, &schema.Message{Role: schemaRole, Content: content})
+	}
+
+	// Ensure last message is user role for the model
+	if len(einoMsgs) > 0 && einoMsgs[len(einoMsgs)-1].Role != schema.User {
+		einoMsgs = append(einoMsgs, &schema.Message{
+			Role:    schema.User,
+			Content: "Please summarize the above result for the user.",
+		})
+	}
+
+	l.setToolContext(targetChannel, targetChatID)
+
+	finalContent, _, err := l.runWithADK(ctx, einoMsgs, nil)
+	if err != nil {
+		l.logger.Error("系统消息处理失败", zap.Error(err))
+		return nil, nil
+	}
+
+	if finalContent == "" {
+		return nil, nil
+	}
+
+	// Save assistant response
+	sess.AddMessage("assistant", finalContent)
+	l.sessions.Save(sess)
+
+	// Send to original channel
+	out := bus.NewOutboundMessage(targetChannel, targetChatID, finalContent)
+	l.bus.PublishOutbound(out)
+	return nil, nil
+}
+
+// runtimeContextRE matches <runtime_context>...</runtime_context> tags
+var runtimeContextRE = regexp.MustCompile(`(?s)<runtime_context>.*?</runtime_context>\s*`)
+
+// base64ImageRE matches base64-encoded image data URIs
+var base64ImageRE = regexp.MustCompile(`data:image/[^;]+;base64,[A-Za-z0-9+/=]{100,}`)
+
+// saveTurn saves user+assistant messages to the session with cleanup:
+// - Strips runtime context from user messages
+// - Replaces base64 images with [image] placeholder
+// - Skips empty assistant messages
+func (l *AgentLoop) saveTurn(sess *session.Session, userContent, assistantContent string) {
+	// Clean user content: remove runtime context
+	cleanUser := runtimeContextRE.ReplaceAllString(userContent, "")
+	cleanUser = strings.TrimSpace(cleanUser)
+
+	// Replace base64 images
+	cleanUser = base64ImageRE.ReplaceAllString(cleanUser, "[image]")
+
+	if cleanUser != "" {
+		sess.AddMessage("user", cleanUser)
+	}
+
+	// Clean and save assistant content
+	cleanAssistant := base64ImageRE.ReplaceAllString(assistantContent, "[image]")
+	// Truncate very long assistant messages for session storage
+	if len(cleanAssistant) > 16000 {
+		cleanAssistant = cleanAssistant[:16000] + "\n[truncated]"
+	}
+
+	if cleanAssistant != "" {
+		sess.AddMessage("assistant", cleanAssistant)
+	}
+
+	l.sessions.Save(sess)
 }
 
 // consolidateMemory 执行记忆合并（带锁防止并发合并同一 session）
@@ -655,11 +844,14 @@ func formatToolHint(toolCalls []schema.ToolCall) string {
 }
 
 // runWithADK 通过 Eino ADK Runner 运行
-func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, onProgress func(ToolProgressEvent)) (string, error) {
+// Returns: (content, finishReason, error)
+// finishReason: "ok" | "error"
+func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, onProgress func(ToolProgressEvent)) (string, string, error) {
 	iter := l.adkRunner.Run(ctx, messages)
 	traceID := traceIDFromContext(ctx)
 
 	var lastContent string
+	finishReason := "ok"
 
 	// 死循环检测：记录连续相同（工具名+参数）调用次数
 	const maxRepeatErrors = 3
@@ -678,7 +870,7 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 			break
 		}
 		if event.Err != nil {
-			return "", fmt.Errorf("agent error: %w", event.Err)
+			return "", "error", fmt.Errorf("agent error: %w", event.Err)
 		}
 
 		// 提取消息内容
@@ -757,7 +949,7 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 						if lastContent == "" {
 							lastContent = fmt.Sprintf("抱歉，我在尝试执行操作时遇到了重复错误（连续 %d 次相同调用），已自动停止。请检查指令或重试。", repeatCount)
 						}
-						return lastContent, nil
+						return lastContent, finishReason, nil
 					}
 				} else {
 					lastToolSig = toolSig
@@ -870,7 +1062,7 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 		}
 	}
 
-	return lastContent, nil
+	return lastContent, finishReason, nil
 }
 
 func traceIDFromContext(ctx context.Context) string {

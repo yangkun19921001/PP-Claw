@@ -20,6 +20,26 @@ import (
 //  3. 任意 OpenAI 兼容 API: 配置 providers.custom 即可
 func NewChatModel(logger *zap.Logger, cfg *config.Config) (model.ToolCallingChatModel, error) {
 	modelName := cfg.Agents.Defaults.Model
+
+	// Check for Azure OpenAI provider
+	azureCfg := cfg.Providers.AzureOpenAI
+	if azureCfg.APIKey != "" && azureCfg.APIBase != "" {
+		azModel := azureCfg.DefaultModel
+		if azModel == "" {
+			azModel = modelName
+		}
+		logger.Info("Using Azure OpenAI provider",
+			zap.String("model", azModel),
+			zap.String("api_base", azureCfg.APIBase),
+		)
+		return NewAzureChatModel(AzureConfig{
+			APIKey:       azureCfg.APIKey,
+			APIBase:      azureCfg.APIBase,
+			DefaultModel: azModel,
+			APIVersion:   azureCfg.APIVersion,
+		}, logger), nil
+	}
+
 	provider := cfg.GetProvider(modelName)
 	providerName := cfg.GetProviderName(modelName)
 

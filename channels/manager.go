@@ -30,38 +30,27 @@ func NewManager(cfg *config.Config, msgBus *bus.MessageBus, logger *zap.Logger) 
 	return m
 }
 
-// initChannels 根据配置初始化渠道
+// initChannels 根据配置动态初始化渠道 — 遍历已注册工厂 + 配置的 enabled 状态
 func (m *Manager) initChannels() {
-	type channelCheck struct {
-		name    string
-		enabled bool
-	}
+	enabledMap := m.config.Channels.GetEnabledMap()
 
-	checks := []channelCheck{
-		{"telegram", m.config.Channels.Telegram.Enabled},
-		{"discord", m.config.Channels.Discord.Enabled},
-		{"slack", m.config.Channels.Slack.Enabled},
-		{"feishu", m.config.Channels.Feishu.Enabled},
-		{"dingtalk", m.config.Channels.DingTalk.Enabled},
-	}
-
-	for _, c := range checks {
-		if !c.enabled {
+	for _, name := range ListFactories() {
+		if !enabledMap[name] {
 			continue
 		}
-		factory, err := GetFactory(c.name)
+		factory, err := GetFactory(name)
 		if err != nil {
-			m.logger.Debug("渠道工厂未注册", zap.String("channel", c.name))
+			m.logger.Debug("渠道工厂未注册", zap.String("channel", name))
 			continue
 		}
 		channel, err := factory(m.bus, m.logger)
 		if err != nil {
-			m.logger.Error("初始化渠道失败", zap.String("channel", c.name), zap.Error(err))
+			m.logger.Error("初始化渠道失败", zap.String("channel", name), zap.Error(err))
 			continue
 		}
-		m.configureChannel(c.name, channel)
-		m.channels[c.name] = channel
-		m.logger.Info("渠道已启用", zap.String("channel", c.name))
+		m.configureChannel(name, channel)
+		m.channels[name] = channel
+		m.logger.Info("渠道已启用", zap.String("channel", name))
 	}
 }
 
@@ -176,15 +165,30 @@ func (m *Manager) configureChannel(name string, ch Channel) {
 	case "feishu":
 		type feishuConfigurable interface {
 			Configure(appID, appSecret, encryptKey, verificationToken string, allowFrom []string)
+			ConfigureExtended(groupPolicy, reactEmoji string, replyToMessage bool)
 		}
 		if fc, ok := ch.(feishuConfigurable); ok {
 			cfg := m.config.Channels.Feishu
 			fc.Configure(cfg.AppID, cfg.AppSecret, cfg.EncryptKey, cfg.VerificationToken, cfg.AllowFrom)
+			fc.ConfigureExtended(cfg.GroupPolicy, cfg.ReactEmoji, cfg.ReplyToMessage)
 		}
 	case "telegram":
 		if tc, ok := ch.(*TelegramChannel); ok {
 			cfg := m.config.Channels.Telegram
 			tc.Configure(cfg.Token, cfg.AllowFrom, cfg.Proxy)
+		}
+	case "wecom":
+		if wc, ok := ch.(*WecomChannel); ok {
+			cfg := m.config.Channels.Wecom
+			wc.Configure(cfg.BotID, cfg.Secret, cfg.WelcomeMessage, cfg.AllowFrom)
+		}
+	case "matrix":
+		type matrixConfigurable interface {
+			Configure(homeserver, accessToken, userID, deviceID string, e2ee bool, maxMediaBytes int, allowFrom []string, groupPolicy string, groupAllowFrom []string)
+		}
+		if mc, ok := ch.(matrixConfigurable); ok {
+			cfg := m.config.Channels.Matrix
+			mc.Configure(cfg.Homeserver, cfg.AccessToken, cfg.UserID, cfg.DeviceID, cfg.E2EEEnabled, cfg.MaxMediaBytes, cfg.AllowFrom, cfg.GroupPolicy, cfg.GroupAllowFrom)
 		}
 	}
 }

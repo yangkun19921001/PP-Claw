@@ -85,3 +85,12 @@ func GetFactory(name string) (ChannelFactory, error) {
 	}
 	return f, nil
 }
+
+// ListFactories 返回所有已注册的渠道工厂名称
+func ListFactories() []string {
+	names := make([]string, 0, len(channelFactories))
+	for name := range channelFactories {
+		names = append(names, name)
+	}
+	return names
+}

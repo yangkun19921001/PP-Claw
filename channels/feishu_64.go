@@ -18,6 +18,7 @@ import (
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	"github.com/larksuite/oapi-sdk-go/v3/ws"
 	"github.com/yangkun19921001/PP-Claw/bus"
+	"github.com/yangkun19921001/PP-Claw/utils"
 	"go.uber.org/zap"
 )
 
@@ -44,6 +45,14 @@ type FeishuChannel struct {
 	wsClient *ws.Client
 	mu       sync.Mutex
 	cancel   context.CancelFunc
+
+	dedup          *utils.LRUCache           // 消息去重
+	TranscribeFunc func(path string) string // 音频转写回调
+
+	// Config-driven behavior
+	groupPolicy    string // "open" or "mention" (default)
+	reactEmoji     string // emoji type for reaction (e.g. "THUMBSUP")
+	replyToMessage bool   // reply to the original message
 }
 
 func init() {
@@ -54,6 +63,7 @@ func init() {
 				Bus:         msgBus,
 				Logger:      logger,
 			},
+			dedup: utils.NewLRUCache(1000),
 		}, nil
 	})
 }
@@ -68,6 +78,19 @@ func (f *FeishuChannel) Configure(appID, appSecret, encryptKey, verificationToke
 	f.VerificationToken = verificationToken
 	f.AllowFrom = allowFrom
 	f.client = lark.NewClient(appID, appSecret)
+}
+
+// ConfigureExtended applies extended configuration options.
+func (f *FeishuChannel) ConfigureExtended(groupPolicy, reactEmoji string, replyToMessage bool) {
+	f.groupPolicy = groupPolicy
+	if f.groupPolicy == "" {
+		f.groupPolicy = "mention"
+	}
+	f.reactEmoji = reactEmoji
+	if f.reactEmoji == "" {
+		f.reactEmoji = "THINKING"
+	}
+	f.replyToMessage = replyToMessage
 }
 
 // Start 启动飞书渠道 (WebSocket 长连接)
@@ -88,6 +111,10 @@ func (f *FeishuChannel) Start(ctx context.Context) error {
 		OnP2MessageReceiveV1(f.handleMessageReceive).
 		OnP2MessageReadV1(func(ctx context.Context, event *larkim.P2MessageReadV1) error {
 			// 忽略已读事件
+			return nil
+		}).
+		OnP2MessageReactionCreatedV1(func(ctx context.Context, event *larkim.P2MessageReactionCreatedV1) error {
+			// 忽略 reaction 创建事件（消除 SDK 报错噪音）
 			return nil
 		}).
 		OnP2ChatAccessEventBotP2pChatEnteredV1(func(ctx context.Context, event *larkim.P2ChatAccessEventBotP2pChatEnteredV1) error {
@@ -131,6 +158,22 @@ func (f *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 	msg := event.Event.Message
 	sender := event.Event.Sender
 
+	// 消息去重：同一 messageID 只处理一次
+	messageID := ptrValue(msg.MessageId)
+	if messageID != "" && f.dedup != nil {
+		if f.dedup.Contains(messageID) {
+			f.Logger.Debug("飞书消息去重，跳过", zap.String("message_id", messageID))
+			return nil
+		}
+		f.dedup.Add(messageID)
+	}
+
+	// Bot 消息过滤
+	if sender != nil && sender.SenderType != nil && *sender.SenderType == "bot" {
+		f.Logger.Debug("飞书 Bot 消息，跳过")
+		return nil
+	}
+
 	// 提取 chatID
 	chatID := ptrValue(msg.ChatId)
 	if chatID == "" {
@@ -140,13 +183,19 @@ func (f *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 
 	chatType := ptrValue(msg.ChatType)
 
-	// 群聊：必须 @机器人 才响应，未 @机器人的消息直接忽略
-	if chatType == "group" && !hasBotMention(msg.Mentions) {
+	// 群聊 mention 检查：group_policy == "open" 跳过
+	rawContent := ptrValue(msg.Content)
+	if chatType == "group" && f.groupPolicy != "open" && !hasBotMention(rawContent, msg.Mentions) {
 		return nil
 	}
 
 	// 提取 senderID: 优先 userId > openId
 	senderID := extractSenderID(sender)
+
+	// Add reaction emoji asynchronously
+	if f.reactEmoji != "" && messageID != "" {
+		go f.addReaction(ctx, messageID, f.reactEmoji)
+	}
 
 	// 提取消息内容和媒体
 	messageType := ptrValue(msg.MessageType)
@@ -189,7 +238,13 @@ func (f *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 		return nil
 	}
 
-	f.HandleMessage(senderID, chatID, content, media, metadata)
+	// DM: use senderID as reply target instead of chatID
+	replyTarget := chatID
+	if chatType != "group" && senderID != "" {
+		replyTarget = senderID
+	}
+
+	f.HandleMessage(senderID, replyTarget, content, media, metadata)
 	return nil
 }
 
@@ -201,41 +256,109 @@ func (f *FeishuChannel) Send(msg *bus.OutboundMessage) error {
 
 	ctx := context.Background()
 
-	receiveIDType := "chat_id"
-	if !strings.HasPrefix(msg.ChatID, "oc_") {
-		receiveIDType = "open_id"
+	receiveIDType := detectReceiveIDType(msg.ChatID)
+	f.Logger.Info("飞书 Send 开始",
+		zap.String("chat_id", msg.ChatID),
+		zap.String("receive_id_type", receiveIDType),
+		zap.String("reply_to", msg.ReplyTo),
+		zap.Int("content_len", len(msg.Content)),
+		zap.Int("media_count", len(msg.Media)),
+		zap.Bool("reply_to_message", f.replyToMessage),
+	)
+
+	// Tool hint messages: send lightweight card (bypass reply routing)
+	if isToolHint, ok := msg.Metadata["_tool_hint"].(bool); ok && isToolHint {
+		f.sendToolHintCard(ctx, receiveIDType, msg.ChatID, msg.Content)
+		return nil
 	}
 
-	// 发送文本消息：按表格数量拆分，避免超出飞书 card table number over limit
-	if msg.Content != "" {
-		parts := splitContentByTables(msg.Content)
-		lastReplyTo := msg.ReplyTo
-		for i, part := range parts {
-			msgID, err := f.sendCard(ctx, receiveIDType, msg.ChatID, lastReplyTo, part)
+	// Determine reply-to message ID — only first send uses Reply API (与 Python first_send 逻辑一致)
+	isProgress := false
+	if p, ok := msg.Metadata["_progress"].(bool); ok && p {
+		isProgress = true
+	}
+
+	replyTo := ""
+	if f.replyToMessage && msg.ReplyTo != "" && !isProgress {
+		replyTo = msg.ReplyTo
+	}
+	firstSend := true // 仅首条消息（媒体或文本）使用 Reply API
+
+	// doSend 发送消息：首条用 Reply API（引用回复），后续用 Create API
+	doSend := func(msgType, content string) error {
+		useReply := ""
+		if replyTo != "" && firstSend {
+			useReply = replyTo
+			firstSend = false
+		}
+		return f.sendMsgOrReply(ctx, receiveIDType, msg.ChatID, msgType, content, useReply)
+	}
+
+	// ① 先发送媒体文件（与 Python 顺序一致）
+	for _, mediaPath := range msg.Media {
+		ext := strings.ToLower(filepath.Ext(mediaPath))
+		if isImageExt(ext) {
+			imageKey, err := f.uploadImage(ctx, mediaPath)
 			if err != nil {
-				return err
+				f.Logger.Error("上传图片失败", zap.Error(err))
+				continue
 			}
-			lastReplyTo = msgID
-			if i < len(parts)-1 {
-				time.Sleep(200 * time.Millisecond)
+			imgJSON, _ := json.Marshal(map[string]string{"image_key": imageKey})
+			if err := doSend("image", string(imgJSON)); err != nil {
+				f.Logger.Error("发送图片失败", zap.Error(err))
+			}
+		} else if isAudioExt(ext) {
+			fileKey, err := f.uploadFile(ctx, mediaPath)
+			if err != nil {
+				f.Logger.Error("上传音频失败", zap.Error(err))
+				continue
+			}
+			audioJSON, _ := json.Marshal(map[string]string{"file_key": fileKey})
+			if err := doSend("audio", string(audioJSON)); err != nil {
+				f.Logger.Error("发送音频失败", zap.Error(err))
+			}
+		} else {
+			fileKey, err := f.uploadFile(ctx, mediaPath)
+			if err != nil {
+				f.Logger.Error("上传文件失败", zap.Error(err))
+				continue
+			}
+			fileJSON, _ := json.Marshal(map[string]string{"file_key": fileKey})
+			if err := doSend("file", string(fileJSON)); err != nil {
+				f.Logger.Error("发送文件失败", zap.Error(err))
 			}
 		}
 	}
 
-	// 发送媒体文件
-	for _, mediaPath := range msg.Media {
-		ext := strings.ToLower(filepath.Ext(mediaPath))
-		if isImageExt(ext) {
-			if err := f.sendImage(ctx, receiveIDType, msg.ChatID, mediaPath); err != nil {
-				f.Logger.Error("发送图片失败", zap.Error(err))
+	// ② 再发送文本消息
+	if msg.Content != "" {
+		format := detectMsgFormat(msg.Content)
+		f.Logger.Info("飞书 Send 文本消息",
+			zap.String("format", format),
+			zap.Int("content_runes", len([]rune(msg.Content))),
+		)
+
+		switch format {
+		case "text":
+			contentJSON, _ := json.Marshal(map[string]string{"text": msg.Content})
+			if err := doSend("text", string(contentJSON)); err != nil {
+				return err
 			}
-		} else if isAudioExt(ext) {
-			if err := f.sendAudio(ctx, receiveIDType, msg.ChatID, mediaPath); err != nil {
-				f.Logger.Error("发送语音流失败", zap.Error(err))
+		case "post":
+			postJSON := markdownToPost(msg.Content)
+			if err := doSend("post", postJSON); err != nil {
+				return err
 			}
-		} else {
-			if err := f.sendFile(ctx, receiveIDType, msg.ChatID, mediaPath); err != nil {
-				f.Logger.Error("发送文件失败", zap.Error(err))
+		default: // "interactive"
+			parts := splitContentByTables(msg.Content)
+			for i, part := range parts {
+				cardJSON := f.buildCardJSON(part)
+				if err := doSend("interactive", cardJSON); err != nil {
+					return err
+				}
+				if i < len(parts)-1 {
+					time.Sleep(200 * time.Millisecond)
+				}
 			}
 		}
 	}
@@ -296,69 +419,6 @@ func (f *FeishuChannel) uploadFile(ctx context.Context, filePath string) (string
 	return *resp.Data.FileKey, nil
 }
 
-// sendImage 上传并发送图片
-func (f *FeishuChannel) sendImage(ctx context.Context, receiveIDType, receiveID, filePath string) error {
-	imageKey, err := f.uploadImage(ctx, filePath)
-	if err != nil {
-		return err
-	}
-
-	content, _ := json.Marshal(map[string]string{"image_key": imageKey})
-	req := larkim.NewCreateMessageReqBuilder().
-		ReceiveIdType(receiveIDType).
-		Body(larkim.NewCreateMessageReqBodyBuilder().
-			ReceiveId(receiveID).
-			MsgType("image").
-			Content(string(content)).
-			Build()).
-		Build()
-
-	_, err = f.client.Im.Message.Create(ctx, req)
-	return err
-}
-
-// sendFile 上传并发送文件
-func (f *FeishuChannel) sendFile(ctx context.Context, receiveIDType, receiveID, filePath string) error {
-	fileKey, err := f.uploadFile(ctx, filePath)
-	if err != nil {
-		return err
-	}
-
-	content, _ := json.Marshal(map[string]string{"file_key": fileKey})
-	req := larkim.NewCreateMessageReqBuilder().
-		ReceiveIdType(receiveIDType).
-		Body(larkim.NewCreateMessageReqBodyBuilder().
-			ReceiveId(receiveID).
-			MsgType("file").
-			Content(string(content)).
-			Build()).
-		Build()
-
-	_, err = f.client.Im.Message.Create(ctx, req)
-	return err
-}
-
-// sendAudio 上传并发送语音
-func (f *FeishuChannel) sendAudio(ctx context.Context, receiveIDType, receiveID, filePath string) error {
-	fileKey, err := f.uploadFile(ctx, filePath)
-	if err != nil {
-		return err
-	}
-
-	content, _ := json.Marshal(map[string]string{"file_key": fileKey})
-	req := larkim.NewCreateMessageReqBuilder().
-		ReceiveIdType(receiveIDType).
-		Body(larkim.NewCreateMessageReqBodyBuilder().
-			ReceiveId(receiveID).
-			MsgType("audio").
-			Content(string(content)).
-			Build()).
-		Build()
-
-	_, err = f.client.Im.Message.Create(ctx, req)
-	return err
-}
-
 // downloadImage 使用 Lark SDK 下载图片到本地临时文件
 func (f *FeishuChannel) downloadImage(ctx context.Context, messageID, imageKey string) (string, error) {
 	req := larkim.NewGetMessageResourceReqBuilder().
@@ -407,11 +467,74 @@ func (f *FeishuChannel) downloadMediaItems(ctx context.Context, media []string, 
 				continue
 			}
 			result = append(result, localPath)
+		} else if strings.HasPrefix(item, "audio:") {
+			fileKey := strings.TrimPrefix(item, "audio:")
+			localPath, err := f.downloadResource(ctx, messageID, fileKey, "audio", ".opus")
+			if err != nil {
+				f.Logger.Warn("飞书音频下载失败，跳过", zap.String("file_key", fileKey), zap.Error(err))
+				continue
+			}
+			// Try transcription if callback is set
+			if f.TranscribeFunc != nil {
+				if text := f.TranscribeFunc(localPath); text != "" {
+					result = append(result, localPath)
+					result = append(result, "transcription:"+text)
+					continue
+				}
+			}
+			result = append(result, localPath)
+		} else if strings.HasPrefix(item, "media:") {
+			fileKey := strings.TrimPrefix(item, "media:")
+			localPath, err := f.downloadResource(ctx, messageID, fileKey, "file", "")
+			if err != nil {
+				f.Logger.Warn("飞书媒体下载失败，跳过", zap.String("file_key", fileKey), zap.Error(err))
+				continue
+			}
+			result = append(result, localPath)
 		} else {
 			result = append(result, item)
 		}
 	}
 	return result
+}
+
+// downloadResource 下载飞书消息资源（音频/文件等）到本地临时文件
+func (f *FeishuChannel) downloadResource(ctx context.Context, messageID, fileKey, resourceType, ext string) (string, error) {
+	req := larkim.NewGetMessageResourceReqBuilder().
+		MessageId(messageID).
+		FileKey(fileKey).
+		Type(resourceType).
+		Build()
+
+	resp, err := f.client.Im.MessageResource.Get(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("download %s %s: %w", resourceType, fileKey, err)
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("download %s %s: code=%d msg=%s", resourceType, fileKey, resp.Code, resp.Msg)
+	}
+
+	if ext == "" {
+		ext = ".bin"
+	}
+	tmpFile, err := os.CreateTemp("", "feishu-"+resourceType+"-*"+ext)
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+
+	if err := resp.WriteFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("write %s to %s: %w", resourceType, tmpPath, err)
+	}
+
+	f.Logger.Info("飞书资源下载完成",
+		zap.String("type", resourceType),
+		zap.String("file_key", fileKey),
+		zap.String("path", tmpPath),
+	)
+	return tmpPath, nil
 }
 
 // ============ 辅助函数 ============
@@ -424,16 +547,25 @@ func ptrValue(v *string) string {
 	return *v
 }
 
-// extractSenderID 从事件中提取发送者 ID (优先 userId > openId)
+// detectReceiveIDType 根据 ID 格式推断飞书 receive_id_type
+// oc_ → chat_id, 其他 → open_id（与 Python 保持一致）
+func detectReceiveIDType(id string) string {
+	if strings.HasPrefix(id, "oc_") {
+		return "chat_id"
+	}
+	return "open_id"
+}
+
+// extractSenderID 从事件中提取发送者 ID（优先 openId，与 Python 保持一致）
 func extractSenderID(sender *larkim.EventSender) string {
 	if sender == nil || sender.SenderId == nil {
 		return ""
 	}
-	if uid := ptrValue(sender.SenderId.UserId); uid != "" {
-		return uid
-	}
 	if oid := ptrValue(sender.SenderId.OpenId); oid != "" {
 		return oid
+	}
+	if uid := ptrValue(sender.SenderId.UserId); uid != "" {
+		return uid
 	}
 	return ""
 }
@@ -464,22 +596,72 @@ func extractMessageContent(rawContent, messageType string) (string, []string) {
 		}
 	case "post":
 		return extractPostContent(contentMap)
+	case "audio":
+		if fileKey, ok := contentMap["file_key"].(string); ok {
+			return "", []string{"audio:" + fileKey}
+		}
+	case "media":
+		if fileKey, ok := contentMap["file_key"].(string); ok {
+			return "", []string{"media:" + fileKey}
+		}
+		if imageKey, ok := contentMap["image_key"].(string); ok {
+			return "", []string{"image:" + imageKey}
+		}
+	case "interactive":
+		return extractInteractiveContent(contentMap), nil
+	case "share_chat", "share_user", "share_calendar_event", "system", "merge_forward", "sticker":
+		return extractShareCardContent(contentMap, messageType), nil
 	}
 
 	return rawContent, nil
 }
 
 // extractPostContent 从 post 富文本消息中提取文本和图片
-// post JSON 结构: {"title":"...","content":[[{"tag":"img","image_key":"img_v3_xxx",...},{"tag":"text","text":"..."}]]}
+// 支持三种 payload 格式:
+//  1. direct: {"title":"...", "content":[[...]]}
+//  2. localized: {"zh_cn":{"title":"...","content":[...]}, "en_us":...}
+//  3. wrapped: {"post":{"zh_cn":{"title":"...","content":[...]}}}
 func extractPostContent(contentMap map[string]any) (string, []string) {
+	// Try wrapped format: {"post":{...}}
+	if postMap, ok := contentMap["post"].(map[string]any); ok {
+		return extractPostFromLocalized(postMap)
+	}
+
+	// Try direct format: has "content" array at top level
+	if _, ok := contentMap["content"].([]any); ok {
+		return extractPostDirect(contentMap)
+	}
+
+	// Try localized format: {"zh_cn":{...}, "en_us":{...}}
+	return extractPostFromLocalized(contentMap)
+}
+
+// extractPostFromLocalized extracts post from localized map (zh_cn > en_us > ja_jp > first found)
+func extractPostFromLocalized(localizedMap map[string]any) (string, []string) {
+	for _, lang := range []string{"zh_cn", "en_us", "ja_jp"} {
+		if postData, ok := localizedMap[lang].(map[string]any); ok {
+			return extractPostDirect(postData)
+		}
+	}
+	// Fallback: try first available language
+	for _, v := range localizedMap {
+		if postData, ok := v.(map[string]any); ok {
+			return extractPostDirect(postData)
+		}
+	}
+	return "", nil
+}
+
+// extractPostDirect extracts text and media from a direct post structure
+func extractPostDirect(postData map[string]any) (string, []string) {
 	var texts []string
 	var media []string
 
-	if title, _ := contentMap["title"].(string); title != "" {
+	if title, _ := postData["title"].(string); title != "" {
 		texts = append(texts, title)
 	}
 
-	contentArr, ok := contentMap["content"].([]any)
+	contentArr, ok := postData["content"].([]any)
 	if !ok {
 		return strings.Join(texts, "\n"), media
 	}
@@ -489,6 +671,7 @@ func extractPostContent(contentMap map[string]any) (string, []string) {
 		if !ok {
 			continue
 		}
+		var lineTexts []string
 		for _, elem := range lineArr {
 			elemMap, ok := elem.(map[string]any)
 			if !ok {
@@ -498,13 +681,40 @@ func extractPostContent(contentMap map[string]any) (string, []string) {
 			switch tag {
 			case "text":
 				if text, _ := elemMap["text"].(string); text != "" {
-					texts = append(texts, text)
+					lineTexts = append(lineTexts, text)
 				}
 			case "img":
 				if imageKey, _ := elemMap["image_key"].(string); imageKey != "" {
 					media = append(media, "image:"+imageKey)
 				}
+			case "a":
+				text, _ := elemMap["text"].(string)
+				href, _ := elemMap["href"].(string)
+				if text != "" && href != "" {
+					lineTexts = append(lineTexts, fmt.Sprintf("[%s](%s)", text, href))
+				} else if text != "" {
+					lineTexts = append(lineTexts, text)
+				}
+			case "at":
+				// @mention in post
+				userName, _ := elemMap["user_name"].(string)
+				if userName != "" {
+					lineTexts = append(lineTexts, "@"+userName)
+				}
+			case "code_block":
+				lang, _ := elemMap["language"].(string)
+				text, _ := elemMap["text"].(string)
+				if text != "" {
+					if lang != "" {
+						lineTexts = append(lineTexts, fmt.Sprintf("```%s\n%s\n```", lang, text))
+					} else {
+						lineTexts = append(lineTexts, fmt.Sprintf("```\n%s\n```", text))
+					}
+				}
 			}
+		}
+		if len(lineTexts) > 0 {
+			texts = append(texts, strings.Join(lineTexts, ""))
 		}
 	}
 
@@ -743,11 +953,25 @@ func stringSliceValue(v any) []string {
 	}
 }
 
-// hasBotMention 检查消息的 mentions 中是否包含机器人
-// 飞书 @机器人时 mention 的 key 为 @_user_N，且 id.open_id 以 "ou_" 开头
-// 简化判断：群聊中只要有 @mention 就认为是在和机器人交互
-func hasBotMention(mentions []*larkim.MentionEvent) bool {
-	return len(mentions) > 0
+// hasBotMention 检查消息是否 @了机器人。
+// 与 Python _is_bot_mentioned 保持一致：
+// 1. rawContent 包含 "@_all" → true
+// 2. mention 的 id.user_id 为空但 id.open_id 以 "ou_" 开头 → true（Bot mention 特征）
+func hasBotMention(rawContent string, mentions []*larkim.MentionEvent) bool {
+	if strings.Contains(rawContent, "@_all") {
+		return true
+	}
+	for _, m := range mentions {
+		if m == nil || m.Id == nil {
+			continue
+		}
+		uid := ptrValue(m.Id.UserId)
+		oid := ptrValue(m.Id.OpenId)
+		if uid == "" && strings.HasPrefix(oid, "ou_") {
+			return true
+		}
+	}
+	return false
 }
 
 // inferFileType 根据扩展名推断飞书文件类型
@@ -757,7 +981,7 @@ func inferFileType(ext string) string {
 	case ".opus", ".ogg":
 		return "opus"
 	case ".mp4", ".mov", ".avi":
-		return "mp4"
+		return "stream" // 视频以 file 类型发送，上传需用 stream 匹配
 	case ".pdf":
 		return "pdf"
 	case ".doc", ".docx":
@@ -792,37 +1016,62 @@ func (f *FeishuChannel) buildCardElements(content string) map[string]any {
 	}
 }
 
+// codeBlockRE matches fenced code blocks (``` ... ```)
+var codeBlockRE = regexp.MustCompile("(?s)```[^`]*```")
+
 // splitHeadings 将内容按标题分割，同时将 Markdown 表格转为飞书 table 组件
+// Code blocks are protected from heading/table splitting using placeholder substitution.
 func (f *FeishuChannel) splitHeadings(content string) []map[string]any {
+	// Protect code blocks: replace with placeholders
+	var codeBlocks []string
+	protected := codeBlockRE.ReplaceAllStringFunc(content, func(match string) string {
+		idx := len(codeBlocks)
+		codeBlocks = append(codeBlocks, match)
+		return fmt.Sprintf("\x00CODEBLOCK_%d\x00", idx)
+	})
+
 	var elements []map[string]any
 
-	matches := headingRE.FindAllStringIndex(content, -1)
+	matches := headingRE.FindAllStringIndex(protected, -1)
 	if len(matches) == 0 {
-		return processContent(content)
+		elements = processContent(protected)
+	} else {
+		lastEnd := 0
+		for _, loc := range matches {
+			before := strings.TrimSpace(protected[lastEnd:loc[0]])
+			if before != "" {
+				elements = append(elements, processContent(before)...)
+			}
+			heading := headingRE.FindStringSubmatch(protected[loc[0]:loc[1]])
+			if len(heading) >= 3 {
+				elements = append(elements, map[string]any{
+					"tag": "div",
+					"text": map[string]any{
+						"tag":     "lark_md",
+						"content": fmt.Sprintf("**%s**", heading[2]),
+					},
+				})
+			}
+			lastEnd = loc[1]
+		}
+
+		remaining := strings.TrimSpace(protected[lastEnd:])
+		if remaining != "" {
+			elements = append(elements, processContent(remaining)...)
+		}
 	}
 
-	lastEnd := 0
-	for _, loc := range matches {
-		before := strings.TrimSpace(content[lastEnd:loc[0]])
-		if before != "" {
-			elements = append(elements, processContent(before)...)
+	// Restore code blocks from placeholders
+	if len(codeBlocks) > 0 {
+		for i, elem := range elements {
+			if content, ok := elem["content"].(string); ok {
+				for j, block := range codeBlocks {
+					placeholder := fmt.Sprintf("\x00CODEBLOCK_%d\x00", j)
+					content = strings.ReplaceAll(content, placeholder, block)
+				}
+				elements[i]["content"] = content
+			}
 		}
-		heading := headingRE.FindStringSubmatch(content[loc[0]:loc[1]])
-		if len(heading) >= 3 {
-			elements = append(elements, map[string]any{
-				"tag": "div",
-				"text": map[string]any{
-					"tag":     "lark_md",
-					"content": fmt.Sprintf("**%s**", heading[2]),
-				},
-			})
-		}
-		lastEnd = loc[1]
-	}
-
-	remaining := strings.TrimSpace(content[lastEnd:])
-	if remaining != "" {
-		elements = append(elements, processContent(remaining)...)
 	}
 
 	return elements
@@ -956,52 +1205,6 @@ func parseTableRow(line string) []string {
 	return cells
 }
 
-// sendCard 发送或回复一张卡片消息，返回新消息的 message_id
-func (f *FeishuChannel) sendCard(ctx context.Context, receiveIDType, chatID, replyTo, content string) (string, error) {
-	card := f.buildCardElements(content)
-	cardJSON, _ := json.Marshal(card)
-
-	if replyTo != "" {
-		resp, err := f.client.Im.Message.Reply(ctx,
-			larkim.NewReplyMessageReqBuilder().
-				MessageId(replyTo).
-				Body(larkim.NewReplyMessageReqBodyBuilder().
-					MsgType("interactive").
-					Content(string(cardJSON)).
-					Build()).
-				Build())
-		if err != nil {
-			return "", fmt.Errorf("回复飞书消息失败: %w", err)
-		}
-		if !resp.Success() {
-			return "", fmt.Errorf("回复飞书消息失败: code=%d msg=%s", resp.Code, resp.Msg)
-		}
-		if resp.Data != nil && resp.Data.MessageId != nil {
-			return *resp.Data.MessageId, nil
-		}
-		return replyTo, nil
-	}
-
-	resp, err := f.client.Im.Message.Create(ctx,
-		larkim.NewCreateMessageReqBuilder().
-			ReceiveIdType(receiveIDType).
-			Body(larkim.NewCreateMessageReqBodyBuilder().
-				ReceiveId(chatID).
-				MsgType("interactive").
-				Content(string(cardJSON)).
-				Build()).
-			Build())
-	if err != nil {
-		return "", fmt.Errorf("发送飞书消息失败: %w", err)
-	}
-	if !resp.Success() {
-		return "", fmt.Errorf("发送飞书消息失败: code=%d msg=%s", resp.Code, resp.Msg)
-	}
-	if resp.Data != nil && resp.Data.MessageId != nil {
-		return *resp.Data.MessageId, nil
-	}
-	return "", nil
-}
 
 // splitContentByTables 按表格边界拆分内容，每段最多包含 5 张表格
 // 避免触发飞书 card table number over limit (ErrCode 11310)
@@ -1060,4 +1263,11 @@ func isAudioExt(ext string) bool {
 		".opus": true, ".ogg": true,
 	}
 	return audioExts[ext]
+}
+
+// buildCardJSON 将内容构建为飞书卡片 JSON 字符串
+func (f *FeishuChannel) buildCardJSON(content string) string {
+	card := f.buildCardElements(content)
+	data, _ := json.Marshal(card)
+	return string(data)
 }

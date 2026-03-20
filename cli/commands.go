@@ -567,28 +567,15 @@ func showChannelStatus() error {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
 
-	fmt.Println("ð\x9f\x93\xa1 Channel Status:")
-	channels := []struct {
-		name    string
-		enabled bool
-	}{
-		{"telegram", cfg.Channels.Telegram.Enabled},
-		{"discord", cfg.Channels.Discord.Enabled},
-		{"slack", cfg.Channels.Slack.Enabled},
-		{"whatsapp", cfg.Channels.WhatsApp.Enabled},
-		{"feishu", cfg.Channels.Feishu.Enabled},
-		{"dingtalk", cfg.Channels.DingTalk.Enabled},
-		{"email", cfg.Channels.Email.Enabled},
-		{"qq", cfg.Channels.QQ.Enabled},
-		{"mochat", cfg.Channels.Mochat.Enabled},
-	}
+	fmt.Println("Channel Status:")
+	enabledMap := cfg.Channels.GetEnabledMap()
 
-	for _, ch := range channels {
-		status := "❌ disabled"
-		if ch.enabled {
-			status = "✅ enabled"
+	for name, enabled := range enabledMap {
+		status := "disabled"
+		if enabled {
+			status = "enabled"
 		}
-		fmt.Printf("  %-12s %s\n", ch.name, status)
+		fmt.Printf("  %-12s %s\n", name, status)
 	}
 	return nil
 }
@@ -888,32 +875,10 @@ func showStatus() error {
 
 	// Channels
 	var enabled []string
-	if cfg.Channels.Telegram.Enabled {
-		enabled = append(enabled, "telegram")
-	}
-	if cfg.Channels.Discord.Enabled {
-		enabled = append(enabled, "discord")
-	}
-	if cfg.Channels.Slack.Enabled {
-		enabled = append(enabled, "slack")
-	}
-	if cfg.Channels.Feishu.Enabled {
-		enabled = append(enabled, "feishu")
-	}
-	if cfg.Channels.DingTalk.Enabled {
-		enabled = append(enabled, "dingtalk")
-	}
-	if cfg.Channels.WhatsApp.Enabled {
-		enabled = append(enabled, "whatsapp")
-	}
-	if cfg.Channels.Email.Enabled {
-		enabled = append(enabled, "email")
-	}
-	if cfg.Channels.QQ.Enabled {
-		enabled = append(enabled, "qq")
-	}
-	if cfg.Channels.Mochat.Enabled {
-		enabled = append(enabled, "mochat")
+	for name, on := range cfg.Channels.GetEnabledMap() {
+		if on {
+			enabled = append(enabled, name)
+		}
 	}
 	if len(enabled) > 0 {
 		fmt.Printf("  Channels:   %s\n", strings.Join(enabled, ", "))

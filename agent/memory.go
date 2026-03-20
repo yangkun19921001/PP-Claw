@@ -14,15 +14,18 @@ import (
 	"go.uber.org/zap"
 )
 
+const maxFailuresBeforeRawArchive = 3
+
 // MemoryStore 双层记忆系统 (对标 pp-claw/agent/memory.py:MemoryStore)
 // - MEMORY.md: 长期事实记忆
 // - HISTORY.md: 事件日志 (grep 可搜索)
 type MemoryStore struct {
-	memoryDir   string
-	memoryFile  string
-	historyFile string
-	chatModel   einomodel.ToolCallingChatModel
-	logger      *zap.Logger
+	memoryDir           string
+	memoryFile          string
+	historyFile         string
+	chatModel           einomodel.ToolCallingChatModel
+	logger              *zap.Logger
+	consecutiveFailures int
 }
 
 // NewMemoryStore 创建记忆存储
@@ -165,13 +168,21 @@ func (m *MemoryStore) Consolidate(ctx context.Context, sessionMessages []map[str
 	if m.chatModel != nil {
 		result, err := m.llmConsolidate(ctx, currentMemory, conversationSummary)
 		if err != nil {
-			m.logger.Warn("LLM 记忆整合失败，使用 fallback", zap.Error(err))
-			m.fallbackConsolidate(conversationSummary, currentMemory)
+			m.logger.Warn("LLM 记忆整合失败", zap.Error(err))
+			if m.failOrRawArchive(oldMessages) {
+				// Raw archived after too many failures
+			} else {
+				m.fallbackConsolidate(conversationSummary, currentMemory)
+			}
 		} else if result.HistoryEntry == "" && result.MemoryUpdate == "" {
-			// LLM 成功但返回空结果，使用 fallback
-			m.logger.Warn("LLM 记忆整合返回空结果，使用 fallback")
-			m.fallbackConsolidate(conversationSummary, currentMemory)
+			m.logger.Warn("LLM 记忆整合返回空结果")
+			if m.failOrRawArchive(oldMessages) {
+				// Raw archived
+			} else {
+				m.fallbackConsolidate(conversationSummary, currentMemory)
+			}
 		} else {
+			m.consecutiveFailures = 0 // reset on success
 			if result.HistoryEntry != "" {
 				if err := m.AppendHistory(result.HistoryEntry); err != nil {
 					m.logger.Error("写入 HISTORY.md 失败", zap.Error(err))
@@ -237,6 +248,45 @@ You MUST call the save_memory tool with your results. Do not respond with text.`
 	}
 
 	return &result, nil
+}
+
+// failOrRawArchive increments the failure counter and triggers rawArchive
+// if we've hit the threshold. Returns true if raw archive was performed.
+func (m *MemoryStore) failOrRawArchive(oldMessages []map[string]any) bool {
+	m.consecutiveFailures++
+	if m.consecutiveFailures >= maxFailuresBeforeRawArchive {
+		m.logger.Warn("记忆整合连续失败达到阈值，执行 raw archive",
+			zap.Int("failures", m.consecutiveFailures),
+		)
+		m.rawArchive(oldMessages)
+		m.consecutiveFailures = 0
+		return true
+	}
+	return false
+}
+
+// rawArchive dumps raw messages to HISTORY.md as a last resort.
+func (m *MemoryStore) rawArchive(messages []map[string]any) {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("[%s] RAW ARCHIVE (%d messages)\n",
+		time.Now().Format("2006-01-02 15:04"), len(messages)))
+
+	for _, msg := range messages {
+		role, _ := msg["role"].(string)
+		content, _ := msg["content"].(string)
+		if content == "" {
+			continue
+		}
+		// Truncate individual messages
+		if len(content) > 500 {
+			content = content[:500] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("  %s: %s\n", strings.ToUpper(role), content))
+	}
+
+	if err := m.AppendHistory(sb.String()); err != nil {
+		m.logger.Error("raw archive 写入 HISTORY.md 失败", zap.Error(err))
+	}
 }
 
 // fallbackConsolidate 简化的 fallback 整合（无 LLM 时使用）

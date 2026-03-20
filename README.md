@@ -1,28 +1,48 @@
-# 🐈 PP-Claw
+<div align="center">
 
-**PP-Claw** 是 [nanobot](https://github.com/HKUDS/nanobot) Python 项目的 Go 语言 1:1 复刻版，一个简洁、透明、高效的个人 AI 助手 Agent。
+```
+    🦐 皮皮虾 · PP-Claw
+    ━━━━━━━━━━━━━━━━━━━
+    ╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱
+   🦀  Personal AI Agent
+    ╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲
+```
 
-基于 [Eino ADK](https://github.com/cloudwego/eino) 构建，支持多 LLM Provider、多渠道接入、MCP 工具扩展、定时任务、长期记忆和技能系统。
+**Go 语言编写的全能个人 AI 助手 Agent**
 
+[![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
+*18 个 LLM Provider · 11 个消息渠道 · MCP 工具扩展 · 长期记忆 · 子代理 · 定时任务*
+
+</div>
 
 ---
 
-## ✨ 特性 / Features
+## 🦐 简介
 
-| 特性 | 说明 |
+**PP-Claw（皮皮虾）** 是一个简洁、高效的个人 AI 助手 Agent，基于 [Eino ADK](https://github.com/cloudwego/eino) 构建。本项目参考 Python 版 [nanobot](https://github.com/pinkpiglet/nanobot) 的架构与功能设计，使用 Go 语言完整重新实现，在保持功能对齐的同时充分利用 Go 的并发性能和静态编译优势。
+
+支持接入飞书、Telegram、Discord、Slack、企业微信、Matrix 等 11 个渠道，对接 OpenAI、Anthropic、DeepSeek、Gemini 等 18 个 LLM Provider，并可通过 MCP 协议无限扩展工具能力。
+
+---
+
+## ✨ 特性一览
+
+| 模块 | 能力 |
 |---|---|
-| 🤖 **多 Provider 支持** | OpenAI / Anthropic / DeepSeek / Groq / Gemini / OpenRouter 等 17+ Provider |
-| 💬 **多渠道接入** | Telegram / Discord / Slack / 飞书 / 钉钉 / WhatsApp / Email / QQ / MoChat |
-| 🔧 **工具系统** | 文件操作 / Shell 执行 / Web 搜索+抓取 / 消息发送 / 子代理 / 定时任务 / 飞书知识库+文档 |
-| 🔌 **MCP 协议** | 通过 stdio / SSE / Streamable HTTP 连接外部 MCP 服务器，自动注册工具 |
-| 🧠 **智能记忆合并** | LLM 驱动的双层记忆系统: MEMORY.md (长期事实) + HISTORY.md (可搜索日志)，自动整合旧消息 |
-| 📦 **技能系统** | 内置 8 个技能 + 支持 workspace 自定义技能，always-load 自动加载 |
-| ⏰ **定时任务** | Cron 表达式 / 固定间隔 / 一次性定时，默认东八区，JSON 持久化，实时唤醒调度 |
-| 💓 **心跳检查** | 定期检查 HEARTBEAT.md，自动执行待办任务 |
-| 📡 **Progress 流式推送** | 工具调用时实时推送进度提示，CLI 显示 🔧 tool hint |
-| 🚀 **Prompt Caching** | 自动为 Anthropic 注入 prompt caching header，降低延迟和成本 |
-| 🛡️ **Shell 安全检查** | 正则模式 deny list + 路径遍历检测 + workspace 限制 |
+| 🤖 **LLM Provider** | OpenAI / Anthropic / DeepSeek / Gemini / Groq / OpenRouter / Azure OpenAI / 智谱 / 通义千问 / Moonshot / MiniMax / SiliconFlow / 火山引擎 / vLLM 等 **18+** |
+| 💬 **消息渠道** | Telegram / Discord / Slack / 飞书 / 钉钉 / WhatsApp / Email / QQ / MoChat / 企业微信 / Matrix **共 11 个** |
+| 🔧 **内置工具** | 文件读写编辑 / Shell 执行 / Web 搜索+抓取 / 消息发送(含媒体) / 子代理 / 定时任务 / 飞书知识库+文档+Aily |
+| 🔌 **MCP 协议** | Stdio / SSE / Streamable HTTP 三种传输，自动发现注册工具 |
+| 🧠 **智能记忆** | LLM 驱动双层记忆（MEMORY.md 长期事实 + HISTORY.md 事件日志），Token 级自动整合 |
+| 🤝 **子代理** | 后台独立 LLM 循环，拥有文件/Shell/Web 工具，`/stop` 一键取消 |
+| 📦 **技能系统** | 8 个内置技能 + workspace 自定义技能，always-load 自动加载 |
+| ⏰ **定时任务** | Cron 表达式 / 固定间隔 / 一次性，结果自动路由回原渠道 |
+| 💓 **心跳检查** | 定期执行 HEARTBEAT.md 待办任务，智能评估是否通知 |
+| 🛡️ **安全防护** | SSRF 拦截 / Shell 危险命令阻断 / 路径遍历检测 / workspace 沙箱 |
+| 📡 **实时进度** | 工具调用时向渠道推送进度提示 |
+| 🚀 **Prompt Caching** | Anthropic 自动注入 caching header |
 
 ---
 
@@ -31,21 +51,14 @@
 ### 环境要求
 
 - Go 1.21+
-- 至少一个 LLM Provider 的 API Key（如 DeepSeek、OpenAI、Anthropic 等）
+- 至少一个 LLM Provider 的 API Key
 
 ### 编译安装
 
 ```bash
 git clone https://github.com/yangkun19921001/PP-Claw.git
 cd PP-Claw
-go mod tidy
 go build -o pp-claw .
-```
-
-或直接安装：
-
-```bash
-go install github.com/yangkun19921001/PP-Claw@latest
 ```
 
 ### 初始化配置
@@ -54,122 +67,320 @@ go install github.com/yangkun19921001/PP-Claw@latest
 ./pp-claw onboard
 ```
 
-按照提示输入 API Key 和模型名称。配置文件将创建在 `~/.pp-claw/pp-claw.yaml`。
+按照引导输入 API Key 和模型名称，配置文件保存在 `~/.pp-claw/pp-claw.yaml`。
 
-### 首次对话
+### 运行
 
 ```bash
-# 单次对话
-./pp-claw agent -m "你好，请介绍一下你自己"
-
-# 交互模式
+# 交互式对话
 ./pp-claw agent
 
-# 启动 Gateway（完整服务：Agent + 渠道 + 心跳 + 定时任务）
+# 单次对话
+./pp-claw agent -m "你好"
+
+# 启动完整服务（Agent + 渠道 + 心跳 + 定时任务）
 ./pp-claw gateway
-```
-
-交互模式下支持 `/new`（新会话）、`/help`（帮助）、`exit`（退出）。
-
-工具调用时会实时显示进度提示：
-
-```
-> 帮我列出 workspace 下的文件
-  🔧 list_directory(".")
-  💭 正在处理...
-
-🤖 以下是 workspace 下的文件列表：
-...
 ```
 
 ---
 
 ## 🐳 Docker 部署
 
-### 前置条件
-
-- Docker 20.10+
-- Docker Compose V2
-- 已创建配置文件 `~/.pp-claw/pp-claw.yaml`（参见下方 [配置](#️-配置) 章节）
-
-### 快速启动
-
 ```bash
-# 构建镜像
-docker compose build
-
-# 启动 Gateway 服务（后台运行）
+# 启动 Gateway 服务
 docker compose up -d gateway
+
+# 交互式 CLI
+docker compose run --rm cli
 
 # 查看日志
 docker compose logs -f gateway
-
-# 停止服务
-docker compose down
 ```
 
-### 交互式 CLI
-
-```bash
-# 启动交互式对话（一次性容器，退出自动删除）
-docker compose run --rm cli
-```
-
-### 配置说明
-
-容器通过挂载 `~/.pp-claw` 目录读取配置和持久化数据：
+容器通过挂载 `~/.pp-claw` 目录读取配置：
 
 ```
 ~/.pp-claw/
-├── pp-claw.yaml          # 主配置文件（必须提前创建）
-├── workspace/            # Agent 工作空间
+├── pp-claw.yaml          # 主配置（必须提前创建）
+├── workspace/
 │   ├── memory/           # 记忆文件
 │   └── skills/           # 自定义技能
 └── sessions/             # 会话持久化
 ```
 
-确保 `pp-claw.yaml` 中 Gateway 监听地址为 `0.0.0.0`：
+---
+
+## 🤖 支持的 Provider
+
+> 模型名原样传递给 API，Provider 通过关键词/前缀自动匹配。
+
+<details>
+<summary>展开全部 18 个 Provider 配置示例</summary>
+
+### DeepSeek
 
 ```yaml
-gateway:
-  host: "0.0.0.0"
-  port: 18790
+agents:
+  defaults:
+    model: "deepseek-chat"
+providers:
+  deepseek:
+    api_key: "sk-your-key"
 ```
 
-### 服务架构
+### Anthropic（自动启用 Prompt Caching）
 
-| 服务 | 说明 | 命令 |
-|---|---|---|
-| `gateway` | 主服务：Agent + 渠道 + 心跳 + 定时任务 | `docker compose up -d gateway` |
-| `cli` | 交互式对话（按需启动） | `docker compose run --rm cli` |
-
-### 常用操作
-
-```bash
-# 重新构建并启动（代码更新后）
-docker compose up -d --build gateway
-
-# 查看容器状态
-docker compose ps
-
-# 进入运行中的容器调试
-docker compose exec gateway sh
-
-# 查看资源使用
-docker stats PP-Claw-gateway
+```yaml
+agents:
+  defaults:
+    model: "claude-sonnet-4-20250514"
+providers:
+  anthropic:
+    api_key: "sk-ant-..."
 ```
 
-### 自定义构建
+### OpenAI
 
-如果不需要 Node.js（edge-tts 技能），可以编辑 `Dockerfile` 删除 Node.js 安装步骤以减小镜像体积（约减少 ~200MB）。
+```yaml
+agents:
+  defaults:
+    model: "gpt-4o"
+providers:
+  openai:
+    api_key: "sk-..."
+```
+
+### Azure OpenAI
+
+```yaml
+agents:
+  defaults:
+    model: "gpt-4o"
+providers:
+  azure_openai:
+    api_key: "your-azure-key"
+    api_base: "https://your-resource.openai.azure.com"
+    api_version: "2024-10-21"
+```
+
+### Gemini
+
+```yaml
+agents:
+  defaults:
+    model: "gemini-2.0-flash"
+providers:
+  gemini:
+    api_key: "AIza..."
+```
+
+### OpenRouter
+
+```yaml
+agents:
+  defaults:
+    model: "anthropic/claude-sonnet-4"
+providers:
+  openrouter:
+    api_key: "sk-or-..."
+```
+
+### 其他
+
+支持 Groq / 智谱 / 通义千问 / Moonshot / MiniMax / SiliconFlow / 火山引擎 / vLLM / AiHubMix / OpenAI Codex / GitHub Copilot，配置格式相同：
+
+```yaml
+providers:
+  <provider_name>:
+    api_key: "your-key"
+    base_url: "https://..."   # 可选
+    model: "override-model"   # 可选
+    extra_headers:             # 可选
+      X-Custom: "value"
+```
+
+</details>
 
 ---
 
-## ⚙️ 配置
+## 💬 支持的渠道
 
-所有配置统一在 `~/.pp-claw/pp-claw.yaml`。
+| 渠道 | 连接方式 | 特色功能 |
+|---|---|---|
+| **飞书** | SDK WebSocket 长连接 | 引用回复 / 表情反应 / 智能格式(text/post/card) / 知识库+文档工具 / 图片音频文件收发 |
+| **Telegram** | Long Polling | 代理支持 / 引用回复 / 多媒体收发 |
+| **Discord** | Gateway WebSocket | Intents 配置 |
+| **Slack** | Socket Mode | Thread 回复 / 表情反应 / 群聊策略(open/mention/allowlist) / DM 策略 |
+| **企业微信** | WebSocket | 欢迎消息 / 流式回复 / 去重 |
+| **Matrix** | Sync 长轮询 | E2EE 端到端加密 / Thread 支持 / Typing 指示器 / Markdown→HTML |
+| **钉钉** | SDK | Client ID/Secret 认证 |
+| **WhatsApp** | Bridge WebSocket | Matrix Bridge 模式 |
+| **Email** | IMAP/SMTP | 自动收发 / 轮询间隔 / 主题前缀 |
+| **QQ** | SDK | App ID/Secret 认证 |
+| **MoChat** | HTTP | Base URL 配置 |
 
-### 完整配置模板
+<details>
+<summary>飞书配置示例</summary>
+
+```yaml
+channels:
+  feishu:
+    enabled: true
+    app_id: "cli_xxxxx"
+    app_secret: "your-app-secret"
+    encrypt_key: ""                  # 可选
+    verification_token: ""           # 可选
+    group_policy: "mention"          # "open" 或 "mention"
+    react_emoji: "THINKING"          # 收到消息时的表情反应
+    reply_to_message: true           # 引用回复
+    wiki_enabled: true               # 启用飞书知识库工具
+    docs_enabled: true               # 启用飞书文档工具
+```
+
+</details>
+
+<details>
+<summary>Telegram 配置示例</summary>
+
+```yaml
+channels:
+  telegram:
+    enabled: true
+    token: "123456:ABC-DEF..."
+    allow_from: []                   # 空=不限制
+    proxy: "socks5://127.0.0.1:1080" # 可选
+```
+
+</details>
+
+<details>
+<summary>企业微信配置示例</summary>
+
+```yaml
+channels:
+  wecom:
+    enabled: true
+    bot_id: "your-bot-id"
+    secret: "your-secret"
+    welcome_message: "你好！我是皮皮虾 🦐"
+```
+
+</details>
+
+<details>
+<summary>Matrix 配置示例</summary>
+
+```yaml
+channels:
+  matrix:
+    enabled: true
+    homeserver: "https://matrix.org"
+    access_token: "syt_..."
+    user_id: "@bot:matrix.org"
+    device_id: "DEVICEID"
+    e2ee_enabled: true
+    group_policy: "mention"          # "open"/"mention"/"allowlist"
+```
+
+</details>
+
+---
+
+## 🔧 工具系统
+
+### 内置工具
+
+| 工具 | 说明 |
+|---|---|
+| `read_file` / `write_file` / `edit_file` / `list_directory` | 文件操作，edit 支持模糊匹配提示 |
+| `execute` | Shell 命令执行，危险命令阻断，超时控制 |
+| `web_search` | Brave Search API 搜索 |
+| `web_fetch` | 网页抓取，HTML→文本，SSRF 防护 |
+| `message` | 消息发送，支持文本+媒体附件（图片/音频/视频/文档） |
+| `spawn` | 后台子代理，独立 LLM 循环 |
+| `cron` | 定时任务管理（add/list/remove） |
+| `feishu_wiki` | 飞书知识库：空间列表/节点浏览/文档搜索 |
+| `feishu_docs` | 飞书文档：读取/信息/块列表 |
+| `feishu_knowledge` | 飞书 Aily 数据知识问答 |
+
+### MCP 扩展
+
+通过 MCP 协议连接外部工具服务器，支持 **Stdio**、**SSE**、**Streamable HTTP** 三种传输：
+
+```yaml
+tools:
+  mcp_servers:
+    # 本地 stdio
+    filesystem:
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+    # 远程 HTTP
+    web-search:
+      url: "https://mcp.example.com/search"
+      headers:
+        Authorization: "Bearer token"
+```
+
+---
+
+## ⏰ 定时任务
+
+默认时区 **Asia/Shanghai**，支持 Cron 表达式 / 固定间隔 / 一次性定时。
+
+```bash
+# 每天 9:00 执行
+pp-claw cron add -n "daily" -m "生成报告" --cron "0 9 * * *"
+
+# 每 60 秒执行
+pp-claw cron add -n "check" -m "检查状态" --every 60
+
+# 一次性定时
+pp-claw cron add -n "remind" -m "会议提醒" --at "2026-06-01T09:00:00"
+
+# 管理
+pp-claw cron list
+pp-claw cron remove --id <job-id>
+pp-claw cron run --id <job-id>
+```
+
+也可以在对话中用自然语言创建，结果自动路由回原渠道。
+
+---
+
+## 📦 技能系统
+
+在 `~/.pp-claw/workspace/skills/` 下创建自定义技能：
+
+```markdown
+<!-- skills/my-skill/SKILL.md -->
+---
+name: my-skill
+description: My custom skill
+always: false
+---
+
+Instructions for the agent...
+```
+
+`always: true` 的技能自动加载到系统提示词。
+
+内置技能：`clawhub` / `cron` / `github` / `memory` / `skill-creator` / `summarize` / `tmux` / `weather`
+
+---
+
+## 🧠 记忆系统
+
+双层记忆，LLM 驱动自动整合：
+
+- **MEMORY.md** — 长期事实和决策
+- **HISTORY.md** — 可搜索的事件日志
+
+消息数超过 `memory_window` 或 Token 超过 `context_window_tokens/2` 时自动触发整合，最多 5 轮迭代。连续 3 次 LLM 整合失败自动降级为原始归档。
+
+---
+
+## ⚙️ 完整配置模板
 
 ```yaml
 # ~/.pp-claw/pp-claw.yaml
@@ -177,11 +388,12 @@ docker stats PP-Claw-gateway
 agents:
   defaults:
     workspace: "~/.pp-claw/workspace"
-    model: "deepseek-chat"               # 模型名，原样传给 API
+    model: "deepseek-chat"
     max_tokens: 8192
     temperature: 0.1
     max_tool_iterations: 40
-    memory_window: 100                    # 超过此数量自动触发记忆合并
+    memory_window: 100
+    context_window_tokens: 65536
 
 providers:
   deepseek:
@@ -195,553 +407,36 @@ gateway:
     interval_s: 1800
 
 channels:
-  send_progress: true                    # 推送工具调用进度到渠道
-  send_tool_hints: true                  # 推送工具名称提示
+  send_progress: true
+  send_tool_hints: true
 
 tools:
-  restrict_to_workspace: false           # 限制文件/Shell 操作在 workspace 内
+  restrict_to_workspace: false
   exec:
-    timeout: 60                          # Shell 命令超时（秒）
+    timeout: 60
   web:
     search:
-      api_key: ""                        # Brave Search API Key
+      api_key: ""
       max_results: 5
+  mcp_servers: {}
 ```
 
 ---
 
-## 🤖 配置 Provider
-
-`agents.defaults.model` 中填写的模型名会**原样传递**给 API，不做任何前缀剥离。Provider 通过模型名中的关键词自动匹配，也可以显式指定。
-
-每个 Provider 支持 4 个配置字段：
-
-| 字段 | 说明 |
-|---|---|
-| `api_key` | API 密钥（必填） |
-| `base_url` | API 地址（也支持 `api_base`，两者等价，`base_url` 优先） |
-| `model` | 可选，覆盖发送给 API 的模型名 |
-| `extra_headers` | 可选，自定义 HTTP 请求头（key-value map） |
-
-### DeepSeek
-
-```yaml
-agents:
-  defaults:
-    model: "deepseek-chat"
-
-providers:
-  deepseek:
-    api_key: "sk-your-deepseek-key"
-```
-
-### Anthropic（自动启用 Prompt Caching）
-
-```yaml
-agents:
-  defaults:
-    model: "claude-sonnet-4-20250514"
-
-providers:
-  anthropic:
-    api_key: "sk-ant-..."
-    # anthropic-beta: prompt-caching-2024-07-31 header 自动注入
-```
-
-### OpenAI
-
-```yaml
-agents:
-  defaults:
-    model: "gpt-4o"
-
-providers:
-  openai:
-    api_key: "sk-..."
-```
-
-### OpenRouter
-
-```yaml
-agents:
-  defaults:
-    model: "anthropic/claude-sonnet-4"      # OpenRouter 需要 provider/model 格式
-
-providers:
-  openrouter:
-    api_key: "sk-or-..."
-```
-
-### 自定义 API 代理
-
-```yaml
-agents:
-  defaults:
-    model: "gpt-4o"
-
-providers:
-  openai:
-    api_key: "sk-your-key"
-    base_url: "https://your-proxy.com/v1"   # 自定义 base_url
-```
-
-### 完全自定义 Provider
-
-```yaml
-agents:
-  defaults:
-    model: "my-local-model"
-
-providers:
-  custom:
-    api_key: "your-api-key"
-    base_url: "https://your-server.com/v1"
-    model: "actual-model-name"              # 可选：覆盖模型名
-    extra_headers:
-      X-Custom-Auth: "token-value"
-      X-Project-ID: "my-project"
-```
-
-### 其他 Provider 示例
-
-```yaml
-# Groq
-agents:
-  defaults:
-    model: "llama-3.3-70b-versatile"
-providers:
-  groq:
-    api_key: "gsk_..."
-
-# Gemini
-agents:
-  defaults:
-    model: "gemini-2.0-flash"
-providers:
-  gemini:
-    api_key: "AIza..."
-
-# Moonshot / Kimi
-agents:
-  defaults:
-    model: "moonshot-v1-128k"
-providers:
-  moonshot:
-    api_key: "sk-..."
-
-# 智谱 AI / Zhipu
-agents:
-  defaults:
-    model: "glm-4-flash"
-providers:
-  zhipu:
-    api_key: "..."
-
-# 阿里 DashScope / 通义千问
-agents:
-  defaults:
-    model: "qwen-plus"
-providers:
-  dashscope:
-    api_key: "sk-..."
-
-# SiliconFlow
-agents:
-  defaults:
-    model: "Qwen/Qwen2.5-72B-Instruct"
-providers:
-  siliconflow:
-    api_key: "sk-..."
-
-# 火山引擎 VolcEngine
-agents:
-  defaults:
-    model: "your-endpoint-id"
-providers:
-  volcengine:
-    api_key: "..."
-
-# 本地 vLLM
-agents:
-  defaults:
-    model: "my-local-model"
-providers:
-  vllm:
-    api_key: "dummy"
-    base_url: "http://localhost:8000/v1"
-```
-
----
-
-## 🔌 配置 MCP 服务器
-
-MCP（Model Context Protocol）允许 Agent 调用外部工具。支持两种传输协议：**stdio** 和 **Streamable HTTP**。
-
-工具启动时自动连接并注册，工具名格式为 `mcp_{server}_{tool}`。
-
-### stdio 模式
-
-适用于本地命令行程序。pp-claw 启动子进程，通过 stdin/stdout 通信。
-
-```yaml
-tools:
-  mcp_servers:
-    # 文件系统工具
-    filesystem:
-      command: "npx"
-      args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-      tool_timeout: 30                    # 工具调用超时（秒），默认 30
-
-    # Git 工具
-    git:
-      command: "uvx"
-      args: ["mcp-server-git", "--repository", "/path/to/repo"]
-      tool_timeout: 60
-
-    # SQLite 数据库
-    sqlite:
-      command: "uvx"
-      args: ["mcp-server-sqlite", "--db-path", "/path/to/database.db"]
-
-    # 带环境变量的服务
-    github:
-      command: "npx"
-      args: ["-y", "@modelcontextprotocol/server-github"]
-      env:
-        GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_your_token"
-      tool_timeout: 30
-
-    # Python MCP Server
-    my-python-tool:
-      command: "python"
-      args: ["-m", "my_mcp_server"]
-      env:
-        MY_API_KEY: "secret"
-```
-
-**stdio 配置字段**：
-
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `command` | 是 | 可执行程序路径或命令名 |
-| `args` | 否 | 命令行参数列表 |
-| `env` | 否 | 额外环境变量（key-value map，会与系统环境合并） |
-| `tool_timeout` | 否 | 工具调用超时秒数，默认 30 |
-
-### Streamable HTTP 模式
-
-适用于远程 MCP 服务器。通过 HTTP 请求通信。
-
-```yaml
-tools:
-  mcp_servers:
-    # 远程搜索服务
-    web-search:
-      url: "https://mcp.example.com/search"
-      headers:
-        Authorization: "Bearer your-token"
-      tool_timeout: 30
-
-    # 远程数据库查询
-    remote-db:
-      url: "https://mcp-db.internal.company.com/v1"
-      headers:
-        Authorization: "Bearer internal-token"
-        X-Team: "engineering"
-      tool_timeout: 60
-
-    # 带 API Key 认证的服务
-    analytics:
-      url: "https://analytics-mcp.example.com"
-      headers:
-        X-API-Key: "your-analytics-key"
-```
-
-**Streamable HTTP 配置字段**：
-
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `url` | 是 | MCP 服务器 URL |
-| `headers` | 否 | HTTP 请求头（key-value map，用于认证等） |
-| `tool_timeout` | 否 | 工具调用超时秒数，默认 30 |
-
-### 混合配置
-
-stdio 和 HTTP 可以同时使用：
-
-```yaml
-tools:
-  mcp_servers:
-    # 本地 stdio
-    filesystem:
-      command: "npx"
-      args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-    # 远程 HTTP
-    web-search:
-      url: "https://mcp.example.com/search"
-      headers:
-        Authorization: "Bearer token"
-```
-
-> **注意**：每个 MCP 服务器独立连接，单个服务器连接失败不影响其他服务器。
-
----
-
-## 💬 配置渠道
-
-### Telegram
-
-```yaml
-channels:
-  telegram:
-    enabled: true
-    token: "123456:ABC-DEF..."               # BotFather 获取的 Bot Token
-    allow_from: ["user_id_1", "user_id_2"]   # 允许的用户 ID（空=不限制）
-    proxy: "socks5://127.0.0.1:1080"         # 可选代理
-    reply_to_message: true                    # 是否引用回复
-```
-
-### Discord
-
-```yaml
-channels:
-  discord:
-    enabled: true
-    token: "your-discord-bot-token"
-    allow_from: ["user_id_1"]
-    intents: 33281                            # Gateway Intents 位掩码
-```
-
-### Slack
-
-```yaml
-channels:
-  slack:
-    enabled: true
-    mode: "socket"                            # Socket Mode
-    bot_token: "xoxb-..."
-    app_token: "xapp-..."
-    reply_in_thread: true
-    react_emoji: "eyes"                       # 收到消息时的 reaction
-    group_policy: "mention"                   # "open" | "mention" | "allowlist"
-    dm:
-      enabled: true
-      policy: "open"                          # "open" | "allowlist"
-```
-
-### 飞书 / Feishu
-
-使用飞书 SDK WebSocket 长连接模式，自动重连，无需配置公网回调地址。
-
-```yaml
-channels:
-  feishu:
-    enabled: true
-    app_id: "cli_xxxxx"
-    app_secret: "your-app-secret"
-    encrypt_key: "your-encrypt-key"           # 可选
-    verification_token: "your-token"          # 可选
-    wiki_enabled: true                        # 启用飞书知识库工具
-    docs_enabled: true                        # 启用飞书文档工具
-```
-
-启用 `wiki_enabled` / `docs_enabled` 后，Agent 可通过工具调用读取飞书知识库空间列表、Wiki 节点和文档内容。
-
-### 钉钉 / DingTalk
-
-```yaml
-channels:
-  dingtalk:
-    enabled: true
-    client_id: "your-client-id"
-    client_secret: "your-client-secret"
-```
-
-### WhatsApp
-
-```yaml
-channels:
-  whatsapp:
-    enabled: true
-    bridge_url: "ws://localhost:8080/ws"      # WhatsApp Bridge WebSocket URL
-    bridge_token: "your-bridge-token"
-```
-
-### Email
-
-```yaml
-channels:
-  email:
-    enabled: true
-    consent_granted: true                     # 确认同意自动收发邮件
-    imap_host: "imap.gmail.com"
-    imap_port: 993
-    imap_username: "you@gmail.com"
-    imap_password: "app-password"
-    smtp_host: "smtp.gmail.com"
-    smtp_port: 587
-    smtp_username: "you@gmail.com"
-    smtp_password: "app-password"
-    from_address: "you@gmail.com"
-    poll_interval_seconds: 60
-    mark_seen: true
-    max_body_chars: 10000
-    subject_prefix: "[pp-claw] "
-```
-
-### QQ
-
-```yaml
-channels:
-  qq:
-    enabled: true
-    app_id: "your-app-id"
-    secret: "your-secret"
-```
-
-### MoChat
-
-```yaml
-channels:
-  mochat:
-    enabled: true
-    base_url: "https://mochat.example.com"
-```
-
----
-
-## ⏰ 定时任务
-
-### 时区支持
-
-- **默认时区：Asia/Shanghai（北京时间/东八区）**
-- 一次性定时 (`--at`) 和 Cron 表达式在不指定时区时均使用北京时间
-- 可通过 `--tz` 参数指定其他 IANA 时区
-- 通过对话创建的定时任务也默认使用北京时间
-
-### 调度机制
-
-- **实时唤醒**：添加新任务后立即唤醒调度器，无需等待轮询周期
-- **真正的 Cron 解析**：使用 `robfig/cron/v3` 库解析标准 5 字段 Cron 表达式
-- **渠道路由**：定时任务触发后，响应会正确路由回创建时的原始渠道（如飞书、Telegram）
-
-### 通过 CLI 管理
-
-```bash
-# 添加定时任务 — 每 60 秒执行一次
-pp-claw cron add --name "check-status" --message "检查服务状态" --every 60
-
-# 添加定时任务 — 使用 Cron 表达式 (每天 9:00 北京时间)
-pp-claw cron add --name "daily-report" --message "生成每日报告" --cron "0 9 * * *"
-
-# 添加定时任务 — 指定其他时区
-pp-claw cron add --name "daily-report" --message "生成每日报告" --cron "0 9 * * *" --tz "America/New_York"
-
-# 添加一次性定时任务（北京时间）
-pp-claw cron add --name "reminder" --message "会议提醒" --at "2025-06-01T09:00:00"
-
-# 添加并投递到渠道
-pp-claw cron add --name "notify" --message "定期通知" --every 3600 \
-  --deliver --channel telegram --to "123456"
-
-# 查看所有定时任务
-pp-claw cron list
-
-# 启用/禁用任务
-pp-claw cron enable <job-id>
-pp-claw cron enable <job-id> --disable
-
-# 删除任务
-pp-claw cron remove --id <job-id>
-
-# 手动运行
-pp-claw cron run --id <job-id>
-```
-
-`cron add` 参数说明：
-
-| 参数 | 缩写 | 必填 | 说明 |
-|---|---|---|---|
-| `--name` | `-n` | 是 | 任务名称 |
-| `--message` | `-m` | 是 | 发送给 Agent 的消息 |
-| `--every` | `-e` | 三选一 | 固定间隔（秒） |
-| `--cron` | `-C` | 三选一 | Cron 表达式（标准 5 字段） |
-| `--at` | | 三选一 | 一次性定时（ISO 8601 格式，默认北京时间） |
-| `--tz` | | 否 | 时区（默认 Asia/Shanghai） |
-| `--deliver` | `-d` | 否 | 投递结果到渠道 |
-| `--channel` | | 否 | 目标渠道 |
-| `--to` | | 否 | 目标用户/Chat ID |
-
-### 通过对话创建
-
-也可以在对话中通过自然语言创建定时任务，Agent 会自动调用 cron 工具。定时任务触发后，Agent 的回复会自动推送回创建时的渠道。
-
----
-
-## 📦 自定义技能
-
-在 workspace 的 `skills/` 目录下创建技能：
-
-```
-~/.pp-claw/workspace/skills/
-└── my-skill/
-    └── SKILL.md
-```
-
-`SKILL.md` 格式：
-
-```markdown
----
-name: my-skill
-description: My custom skill description
-always: false
----
-
-# My Skill
-
-Detailed instructions for the agent...
-```
-
-设置 `always: true` 会自动加载技能到系统提示词中。
-
-内置 8 个技能：`clawhub`、`cron`、`github`、`memory`、`skill-creator`、`summarize`、`tmux`、`weather`。
-
----
-
-## 🧠 记忆系统
-
-Agent 自动管理双层记忆：
-
-- `~/.pp-claw/workspace/memory/MEMORY.md` — 长期事实记忆
-- `~/.pp-claw/workspace/memory/HISTORY.md` — 事件日志（可用 grep 搜索）
-
-对话消息数超过 `memory_window` 时自动触发 LLM 驱动的记忆合并：
-
-1. LLM 分析旧消息，提取关键事实和决策
-2. 与现有 MEMORY.md 合并，去除过时信息
-3. 生成简洁的历史日志条目写入 HISTORY.md
-
-使用 `/new` 命令时会先整合当前会话再清空。
-
----
-
-## 📝 CLI 命令速览
+## 📝 CLI 命令
 
 | 命令 | 说明 |
 |---|---|
 | `pp-claw onboard` | 交互式初始化配置 |
-| `pp-claw gateway` | 启动完整 Gateway 服务 |
+| `pp-claw gateway` | 启动完整服务 |
 | `pp-claw agent` | 交互模式 |
 | `pp-claw agent -m "..."` | 单次对话 |
-| `pp-claw status` | 查看运行状态 |
-| `pp-claw channels status` | 查看渠道状态 |
-| `pp-claw cron list` | 列出定时任务 |
-| `pp-claw cron add` | 添加定时任务 |
-| `pp-claw cron enable <id>` | 启用任务 |
-| `pp-claw cron enable <id> --disable` | 禁用任务 |
-| `pp-claw cron remove --id <id>` | 删除任务 |
-| `pp-claw cron run --id <id>` | 手动运行任务 |
-| `pp-claw version` | 显示版本号 |
+| `pp-claw status` | 运行状态 |
+| `pp-claw channels status` | 渠道状态 |
+| `pp-claw cron list/add/remove/run/enable` | 定时任务管理 |
+| `pp-claw version` | 版本信息 |
+
+交互模式命令：`/new`（新会话）、`/stop`（取消任务）、`/help`（帮助）、`exit`（退出）
 
 ---
 
@@ -749,56 +444,65 @@ Agent 自动管理双层记忆：
 
 ```
 PP-Claw/
-├── main.go                     # 入口
-├── cli/commands.go             # CLI 命令
+├── main.go                      # 入口
+├── cli/
+│   ├── commands.go              # CLI 命令 (Cobra)
+│   ├── wizard.go                # 交互式引导向导
+│   └── tui/                     # Bubble Tea 交互界面
 ├── agent/
-│   ├── loop.go                 # Agent 核心循环 (Eino ADK Runner)
-│   ├── context.go              # 上下文构建 (系统提示词/多模态/技能)
-│   ├── memory.go               # 双层记忆系统 (LLM 驱动合并)
-│   ├── skills.go               # 技能加载器
-│   ├── subagent.go             # 子代理管理器
-│   └── tools/
-│       ├── registry.go         # 工具注册表 + Eino BaseTool 适配器
-│       ├── filesystem.go       # 文件操作 (read/write/edit/list) + 模糊匹配提示
-│       ├── shell.go            # Shell 命令执行 (正则安全检查)
-│       ├── web.go              # Web 搜索 (Brave) + 网页抓取
-│       ├── message.go          # 消息发送工具
-│       ├── spawn.go            # 子代理生成工具
-│       ├── cron.go             # 定时任务工具 (默认东八区)
-│       ├── feishu_wiki.go     # 飞书知识库工具
-│       ├── feishu_docs.go     # 飞书文档工具
-│       └── mcp.go              # MCP 客户端 (stdio + Streamable HTTP)
-├── bus/                        # 消息总线 (广播模式，多订阅者)
-├── channels/                   # 9 个渠道实现
-├── config/                     # 配置 Schema + YAML 加载
-├── providers/                  # 17 Provider 注册表 + ChatModel 创建
-├── session/                    # 会话管理 (JSONL 持久化)
-├── cron/                       # 定时任务服务
-├── heartbeat/                  # 心跳服务
-├── skills/                     # 8 个内置技能
-└── templates/                  # Workspace 模板文件
+│   ├── loop.go                  # Agent 核心循环 (Eino ADK)
+│   ├── context.go               # 上下文构建
+│   ├── memory.go                # 双层记忆系统
+│   ├── memory_consolidator.go   # Token 级记忆整合
+│   ├── skills.go                # 技能加载器
+│   ├── subagent.go              # 子代理管理器
+│   └── tools/                   # 13+ 内置工具
+├── bus/                         # 消息总线
+├── channels/                    # 11 个渠道实现
+├── config/                      # 配置 Schema + YAML 加载
+├── providers/                   # 18 Provider + Azure OpenAI
+├── session/                     # 会话管理 (JSONL 持久化)
+├── security/                    # SSRF 防护
+├── cron/                        # 定时任务服务
+├── heartbeat/                   # 心跳服务
+├── skills/                      # 8 个内置技能
+├── utils/                       # LRU 缓存 / 通知评估器
+└── templates/                   # Workspace 模板
 ```
+
+---
 
 ## 🛠️ 技术栈
 
-- **Go 1.21+**
-- **[Eino ADK](https://github.com/cloudwego/eino)** — Agent 核心框架
-- **[mcp-go](https://github.com/mark3labs/mcp-go)** — MCP 协议客户端
-- **[Cobra](https://github.com/spf13/cobra)** — CLI 框架
-- **[Zap](https://go.uber.org/zap)** — 结构化日志
+| 组件 | 技术 |
+|---|---|
+| Agent 框架 | [Eino ADK](https://github.com/cloudwego/eino) |
+| MCP 客户端 | [mcp-go](https://github.com/mark3labs/mcp-go) |
+| CLI | [Cobra](https://github.com/spf13/cobra) |
+| TUI | [Bubble Tea](https://github.com/charmbracelet/bubbletea) |
+| 日志 | [Zap](https://go.uber.org/zap) |
+| 飞书 SDK | [oapi-sdk-go](https://github.com/larksuite/oapi-sdk-go) |
+| Matrix SDK | [mautrix-go](https://github.com/mautrix/go) |
 
-## 📊 与 Python pp-claw 对比
+---
 
-| 指标 | Python pp-claw | Go pp-claw |
-|---|---|---|
-| 文件数 | 42 .py | 37 .go |
-| 代码行数 | ~13,000 | ~6,700 |
-| LLM 层 | LiteLLM (多 Provider) | Eino ADK (OpenAI 兼容) |
-| 工具接口 | ABC 基类 | Go interface |
-| 异步模型 | asyncio | goroutine + channel |
-| 消息总线 | asyncio.Queue | Go channel |
-| MCP 客户端 | mcp SDK | mcp-go |
-| 配置格式 | JSON/YAML/ENV | YAML |
+## 🏗️ 跨平台构建
+
+```bash
+make build          # 当前平台
+make build-all      # 全部平台
+```
+
+| 平台 | 架构 |
+|---|---|
+| linux | amd64 / arm64 / mips64le |
+| darwin | amd64 / arm64 (Apple Silicon) |
+| windows | amd64 |
+| android | arm64 |
+
+全部静态编译（CGO_ENABLED=0），无外部依赖。
+
+---
 
 ## 📄 License
 

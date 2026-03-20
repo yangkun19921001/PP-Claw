@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
+	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/yangkun19921001/PP-Claw/utils"
 	"go.uber.org/zap"
 )
 
@@ -25,6 +27,12 @@ type Service struct {
 	running   bool
 	cancel    context.CancelFunc
 	logger    *zap.Logger
+	chatModel einomodel.ToolCallingChatModel
+}
+
+// SetChatModel sets the chat model for notification evaluation.
+func (s *Service) SetChatModel(chatModel einomodel.ToolCallingChatModel) {
+	s.chatModel = chatModel
 }
 
 // NewService 创建 Heartbeat 服务
@@ -110,7 +118,6 @@ func (s *Service) tick() {
 
 	s.logger.Info("Heartbeat: 检查任务...")
 
-	// 简化实现: 直接执行 (完整实现应使用 LLM decision phase)
 	if s.onExecute != nil {
 		response, err := s.onExecute(content)
 		if err != nil {
@@ -118,6 +125,14 @@ func (s *Service) tick() {
 			return
 		}
 		if response != "" && s.onNotify != nil {
+			// Evaluate if the response warrants notification
+			if s.chatModel != nil {
+				ctx := context.Background()
+				if !utils.EvaluateResponse(ctx, response, "heartbeat task", s.chatModel, s.logger) {
+					s.logger.Info("Heartbeat: 评估器决定不通知")
+					return
+				}
+			}
 			s.logger.Info("Heartbeat: 完成，投递响应")
 			s.onNotify(response)
 		}
