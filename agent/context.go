@@ -1,10 +1,8 @@
 package agent
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io/fs"
-	"mime"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -213,7 +211,9 @@ func (c *ContextBuilder) BuildMessages(
 
 	// 当前用户消息 (包含图片和运行时上下文)
 	userContent := c.buildUserContent(currentMessage, media)
-	userContent = c.injectRuntimeContext(userContent, channel, chatID)
+	if withRuntime, ok := c.injectRuntimeContext(userContent, channel, chatID).(string); ok {
+		userContent = withRuntime
+	}
 	messages = append(messages, map[string]any{
 		"role":    "user",
 		"content": userContent,
@@ -222,41 +222,34 @@ func (c *ContextBuilder) BuildMessages(
 	return messages
 }
 
-// buildUserContent 构建用户消息内容 (支持 base64 图片, 对标 context.py:_build_user_content)
-func (c *ContextBuilder) buildUserContent(text string, media []string) any {
+// buildUserContent 构建用户消息内容。
+// 当前统一走文本链路：如果存在本地媒体文件，则把路径追加到文本里，由模型按普通文本理解。
+func (c *ContextBuilder) buildUserContent(text string, media []string) string {
 	if len(media) == 0 {
 		return text
 	}
 
-	var images []map[string]any
+	var localMedia []string
 	for _, path := range media {
-		data, err := os.ReadFile(path)
-		if err != nil {
+		if _, err := os.Stat(path); err != nil {
 			continue
 		}
-		ext := strings.ToLower(filepath.Ext(path))
-		mimeType := mime.TypeByExtension(ext)
-		if mimeType == "" || !strings.HasPrefix(mimeType, "image/") {
-			continue
-		}
-		b64 := base64.StdEncoding.EncodeToString(data)
-		images = append(images, map[string]any{
-			"type": "image_url",
-			"image_url": map[string]any{
-				"url": fmt.Sprintf("data:%s;base64,%s", mimeType, b64),
-			},
-		})
+		localMedia = append(localMedia, path)
 	}
 
-	if len(images) == 0 {
+	if len(localMedia) == 0 {
 		return text
 	}
 
-	// 多模态消息: images + text
-	result := make([]map[string]any, 0, len(images)+1)
-	result = append(result, images...)
-	result = append(result, map[string]any{"type": "text", "text": text})
-	return result
+	var sb strings.Builder
+	sb.WriteString(text)
+	sb.WriteString("\n\n[Attached Local Media]\n")
+	for _, path := range localMedia {
+		sb.WriteString("- ")
+		sb.WriteString(path)
+		sb.WriteString("\n")
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 // injectRuntimeContext 注入运行时上下文 (对标 context.py:_inject_runtime_context)

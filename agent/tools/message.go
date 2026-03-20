@@ -9,10 +9,11 @@ import (
 
 // MessageTool 消息发送工具 (对标 pp-claw/agent/tools/message.py:MessageTool)
 type MessageTool struct {
-	SendCallback func(*bus.OutboundMessage)
-	channel      string
-	chatID       string
-	SentInTurn   bool
+	SendCallback    func(*bus.OutboundMessage)
+	SendWithContext func(context.Context, *bus.OutboundMessage)
+	channel         string
+	chatID          string
+	SentInTurn      bool
 }
 
 func (t *MessageTool) Name() string { return "message" }
@@ -40,7 +41,7 @@ func (t *MessageTool) StartTurn() {
 	t.SentInTurn = false
 }
 
-func (t *MessageTool) Execute(_ context.Context, params map[string]any) (string, error) {
+func (t *MessageTool) Execute(ctx context.Context, params map[string]any) (string, error) {
 	content, _ := params["content"].(string)
 	if content == "" {
 		return "", fmt.Errorf("content is required")
@@ -58,12 +59,16 @@ func (t *MessageTool) Execute(_ context.Context, params map[string]any) (string,
 	if channel == "" || chatID == "" {
 		return "Error: No target channel/chat specified", nil
 	}
-	if t.SendCallback == nil {
+	if t.SendWithContext == nil && t.SendCallback == nil {
 		return "Error: Message sending not configured", nil
 	}
 
 	msg := bus.NewOutboundMessage(channel, chatID, content)
-	t.SendCallback(msg)
+	if t.SendWithContext != nil {
+		t.SendWithContext(ctx, msg)
+	} else {
+		t.SendCallback(msg)
+	}
 	t.SentInTurn = true
 
 	return fmt.Sprintf("Message sent to %s:%s", channel, chatID), nil

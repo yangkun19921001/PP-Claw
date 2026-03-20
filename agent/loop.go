@@ -2,13 +2,9 @@ package agent
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"mime"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -36,6 +32,10 @@ type ToolProgressEvent struct {
 	Success       bool
 	ResultPreview string
 }
+
+type agentTraceContextKey string
+
+const agentTraceIDContextKey agentTraceContextKey = "agent_trace_id"
 
 // AgentLoop Agent 循环 (对标 pp-claw/agent/loop.py:AgentLoop)
 type AgentLoop struct {
@@ -152,6 +152,13 @@ func (l *AgentLoop) registerDefaultTools() {
 	// 消息工具
 	l.tools.Register(&tools.MessageTool{
 		SendCallback: l.bus.PublishOutbound,
+		SendWithContext: func(ctx context.Context, msg *bus.OutboundMessage) {
+			traceID := traceIDFromContext(ctx)
+			l.logger.Info("消息链路: 通过 message 工具发送出站消息",
+				outboundLogFields(msg, traceID)...,
+			)
+			l.bus.PublishOutbound(msg)
+		},
 	})
 
 	// 子代理工具 (对标 loop.py: spawn tool)
@@ -243,21 +250,66 @@ func (l *AgentLoop) Run(ctx context.Context) error {
 			continue
 		}
 
+		traceID := buildMessageTraceID(msg)
+		msgCtx := withMessageTrace(ctx, traceID)
+		consumeStarted := time.Now()
+		inboundFields := inboundLogFields(msg, traceID)
+		inboundFields = append(inboundFields,
+			zap.Int("inbound_queue_remaining", l.bus.InboundSize()),
+		)
+		l.logger.Info("消息链路: 收到入站消息", inboundFields...)
+
 		// 处理消息
-		response, err := l.processMessage(ctx, msg)
+		response, err := l.processMessage(msgCtx, msg)
 		if err != nil {
-			l.logger.Error("处理消息失败", zap.Error(err))
+			l.logger.Error("消息链路: 处理消息失败",
+				append(inboundFields,
+					zap.Int64("duration_ms", time.Since(consumeStarted).Milliseconds()),
+					zap.Error(err),
+				)...,
+			)
 			errMsg := bus.NewOutboundMessage(
 				msg.Channel, msg.ChatID,
 				fmt.Sprintf("Sorry, I encountered an error: %s", err.Error()),
 			)
 			errMsg.ReplyTo = extractReplyTo(msg)
+			l.logger.Info("消息链路: 发布错误响应",
+				append(
+					outboundLogFields(errMsg, traceID),
+					zap.Int64("duration_ms", time.Since(consumeStarted).Milliseconds()),
+				)...,
+			)
 			l.bus.PublishOutbound(errMsg)
+			l.logger.Info("消息链路: 消息消费结束",
+				append(inboundFields,
+					zap.String("result", "error_response"),
+					zap.Int64("duration_ms", time.Since(consumeStarted).Milliseconds()),
+				)...,
+			)
 			continue
 		}
 		if response != nil {
+			l.logger.Info("消息链路: 发布最终响应",
+				append(
+					outboundLogFields(response, traceID),
+					zap.Int64("duration_ms", time.Since(consumeStarted).Milliseconds()),
+				)...,
+			)
 			l.bus.PublishOutbound(response)
+			l.logger.Info("消息链路: 消息消费结束",
+				append(inboundFields,
+					zap.String("result", "final_response"),
+					zap.Int64("duration_ms", time.Since(consumeStarted).Milliseconds()),
+				)...,
+			)
+			continue
 		}
+		l.logger.Info("消息链路: 消息消费结束",
+			append(inboundFields,
+				zap.String("result", "no_final_response"),
+				zap.Int64("duration_ms", time.Since(consumeStarted).Milliseconds()),
+			)...,
+		)
 	}
 
 	return nil
@@ -324,16 +376,33 @@ func (l *AgentLoop) CloseMCP() {
 }
 
 // processMessage 处理单条消息 (对标 loop.py:_process_message)
-func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage) (*bus.OutboundMessage, error) {
-	preview := msg.Content
-	if len(preview) > 80 {
-		preview = preview[:80] + "..."
+func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage) (response *bus.OutboundMessage, err error) {
+	traceID := traceIDFromContext(ctx)
+	if traceID == "" {
+		traceID = buildMessageTraceID(msg)
+		ctx = withMessageTrace(ctx, traceID)
 	}
-	l.logger.Info("处理消息",
-		zap.String("channel", msg.Channel),
-		zap.String("sender", msg.SenderID),
-		zap.String("content", preview),
-	)
+
+	started := time.Now()
+	result := "processing"
+	defer func() {
+		fields := append(inboundLogFields(msg, traceID),
+			zap.String("result", result),
+			zap.Int64("duration_ms", time.Since(started).Milliseconds()),
+		)
+		if response != nil {
+			fields = append(fields,
+				zap.Int("response_length", len(response.Content)),
+				zap.Int("response_media_count", len(response.Media)),
+			)
+		}
+		if err != nil {
+			fields = append(fields, zap.Error(err))
+		}
+		l.logger.Info("消息链路: processMessage 结束", fields...)
+	}()
+
+	l.logger.Info("消息链路: 进入处理流水线", inboundLogFields(msg, traceID)...)
 
 	// 更新工具上下文
 	l.setToolContext(msg.Channel, msg.ChatID)
@@ -356,11 +425,15 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 		}
 		sess.Clear()
 		l.sessions.Save(sess)
-		return bus.NewOutboundMessage(msg.Channel, msg.ChatID, "New session started."), nil
+		result = "command_new"
+		response = bus.NewOutboundMessage(msg.Channel, msg.ChatID, "New session started.")
+		return response, nil
 	}
 	if cmd == "/help" {
-		return bus.NewOutboundMessage(msg.Channel, msg.ChatID,
-			"🦞 pp-claw commands:\n/new — Start a new conversation\n/help — Show available commands"), nil
+		result = "command_help"
+		response = bus.NewOutboundMessage(msg.Channel, msg.ChatID,
+			"🦞 pp-claw commands:\n/new — Start a new conversation\n/help — Show available commands")
+		return response, nil
 	}
 
 	// 获取/创建 Session
@@ -369,6 +442,12 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 
 	// 构建消息上下文
 	history := sess.GetHistory(l.memoryWindow)
+	l.logger.Info("消息链路: 会话上下文准备完成",
+		zap.String("trace_id", traceID),
+		zap.String("session_key", sessionKey),
+		zap.Int("history_count", len(history)),
+		zap.Int("media_count", len(msg.Media)),
+	)
 
 	// 构建 Eino 消息: system prompt + history + user message
 	var einoMsgs []*schema.Message
@@ -397,55 +476,23 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	}
 
 	// Current user message with runtime context
-	rc := l.context.injectRuntimeContext(msg.Content, msg.Channel, msg.ChatID)
+	userContent := l.context.buildUserContent(msg.Content, msg.Media)
+	rc := l.context.injectRuntimeContext(userContent, msg.Channel, msg.ChatID)
 	userContentStr, _ := rc.(string)
 	if userContentStr == "" {
-		userContentStr = msg.Content
+		userContentStr = userContent
 	}
+	einoMsgs = append(einoMsgs, &schema.Message{Role: schema.User, Content: userContentStr})
 
-	// 构建多模态消息（图片 + 文本）或纯文本消息
-	// Media 由各渠道负责下载为本地文件路径，这里只处理确实存在的本地图片文件
-	var imageParts []schema.MessageInputPart
-	for _, mediaPath := range msg.Media {
-		// 跳过非本地路径（如未下载的 token、URL 等）
-		if _, err := os.Stat(mediaPath); err != nil {
-			continue
-		}
-		// 仅处理图片类型
-		mimeType := mime.TypeByExtension(filepath.Ext(mediaPath))
-		if !strings.HasPrefix(mimeType, "image/") {
-			continue
-		}
-		data, err := os.ReadFile(mediaPath)
-		if err != nil {
-			l.logger.Warn("读取媒体文件失败", zap.String("path", mediaPath), zap.Error(err))
-			continue
-		}
-		b64 := base64.StdEncoding.EncodeToString(data)
-		imageParts = append(imageParts, schema.MessageInputPart{
-			Type: schema.ChatMessagePartTypeImageURL,
-			Image: &schema.MessageInputImage{
-				MessagePartCommon: schema.MessagePartCommon{
-					Base64Data: &b64,
-					MIMEType:   mimeType,
-				},
-			},
-		})
-	}
-
-	if len(imageParts) > 0 {
-		// 图片在前，文本在后
-		parts := append(imageParts, schema.MessageInputPart{
-			Type: schema.ChatMessagePartTypeText,
-			Text: userContentStr,
-		})
-		einoMsgs = append(einoMsgs, &schema.Message{
-			Role:                  schema.User,
-			UserInputMultiContent: parts,
-		})
-	} else {
-		einoMsgs = append(einoMsgs, &schema.Message{Role: schema.User, Content: userContentStr})
-	}
+	l.logger.Info("消息链路: 模型输入构建完成",
+		zap.String("trace_id", traceID),
+		zap.String("session_key", sessionKey),
+		zap.Int("eino_messages", len(einoMsgs)),
+		zap.Int("history_count", len(history)),
+		zap.Int("attached_media_count", len(msg.Media)),
+		zap.Bool("multimodal", false),
+		zap.Int("user_content_length", len(userContentStr)),
+	)
 
 	// 构建 progress 回调
 	replyTo := extractReplyTo(msg)
@@ -476,14 +523,35 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 			// "thought" — plain progress text
 		}
 
+		progressFields := append(
+			outboundLogFields(progressMsg, traceID),
+			zap.String("progress_kind", evt.Kind),
+		)
+		if evt.ToolName != "" {
+			progressFields = append(progressFields, zap.String("tool_name", evt.ToolName))
+		}
+		if evt.ToolCallID != "" {
+			progressFields = append(progressFields, zap.String("tool_call_id", evt.ToolCallID))
+		}
+		l.logger.Info("消息链路: 发布进度消息", progressFields...)
 		l.bus.PublishOutbound(progressMsg)
 	}
 
 	// 通过 ADK Runner 执行
+	l.logger.Info("消息链路: 开始执行 Agent",
+		zap.String("trace_id", traceID),
+		zap.String("session_key", sessionKey),
+	)
 	finalContent, err := l.runWithADK(ctx, einoMsgs, onProgress)
 	if err != nil {
+		result = "agent_error"
 		return nil, err
 	}
+	l.logger.Info("消息链路: Agent 执行完成",
+		zap.String("trace_id", traceID),
+		zap.String("session_key", sessionKey),
+		zap.Int("final_content_length", len(finalContent)),
+	)
 
 	if finalContent == "" {
 		finalContent = "I've completed processing but have no response to give."
@@ -495,6 +563,7 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 		responsePreview = responsePreview[:200] + "..."
 	}
 	l.logger.Info("🤖 Agent response",
+		zap.String("trace_id", traceID),
 		zap.String("channel", msg.Channel),
 		zap.String("chat_id", msg.ChatID),
 		zap.Int("length", len(finalContent)),
@@ -505,23 +574,41 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	sess.AddMessage("user", msg.Content)
 	sess.AddMessage("assistant", finalContent)
 	l.sessions.Save(sess)
+	l.logger.Info("消息链路: 会话保存完成",
+		zap.String("trace_id", traceID),
+		zap.String("session_key", sessionKey),
+		zap.Int("total_messages", len(sess.Messages)),
+	)
 
 	// 检查是否需要触发记忆合并
 	unconsolidated := len(sess.Messages) - sess.LastConsolidated
 	if unconsolidated >= l.memoryWindow {
+		l.logger.Info("消息链路: 触发异步记忆合并",
+			zap.String("trace_id", traceID),
+			zap.String("session_key", sessionKey),
+			zap.Int("unconsolidated", unconsolidated),
+			zap.Int("memory_window", l.memoryWindow),
+		)
 		go l.consolidateMemory(ctx, sess, false)
 	}
 
 	// 如果 MessageTool 已经在本轮回合中发送过消息，则不再重复发送
 	if t := l.tools.Get("message"); t != nil {
 		if mt, ok := t.(*tools.MessageTool); ok && mt.SentInTurn {
+			result = "message_tool_sent"
+			l.logger.Info("消息链路: 本轮消息已由 message 工具发送，跳过最终出站发布",
+				zap.String("trace_id", traceID),
+				zap.String("session_key", sessionKey),
+			)
 			return nil, nil
 		}
 	}
 
 	out := bus.NewOutboundMessage(msg.Channel, msg.ChatID, finalContent)
 	out.ReplyTo = extractReplyTo(msg)
-	return out, nil
+	result = "final_response_ready"
+	response = out
+	return response, nil
 }
 
 // consolidateMemory 执行记忆合并（带锁防止并发合并同一 session）
@@ -570,6 +657,7 @@ func formatToolHint(toolCalls []schema.ToolCall) string {
 // runWithADK 通过 Eino ADK Runner 运行
 func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, onProgress func(ToolProgressEvent)) (string, error) {
 	iter := l.adkRunner.Run(ctx, messages)
+	traceID := traceIDFromContext(ctx)
 
 	var lastContent string
 
@@ -604,7 +692,11 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 
 		msg, msgErr := mv.GetMessage()
 		if msgErr != nil {
-			l.logger.Warn("GetMessage error", zap.Error(msgErr), zap.String("role", string(role)))
+			l.logger.Warn("GetMessage error",
+				zap.String("trace_id", traceID),
+				zap.Error(msgErr),
+				zap.String("role", string(role)),
+			)
 			continue
 		}
 		if msg == nil {
@@ -612,6 +704,7 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 		}
 
 		l.logger.Debug("ADK event",
+			zap.String("trace_id", traceID),
 			zap.String("mv_role", string(role)),
 			zap.String("msg_role", string(msg.Role)),
 			zap.String("tool_call_id", msg.ToolCallID),
@@ -638,6 +731,7 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 				for _, tc := range msg.ToolCalls {
 					toolSig += tc.Function.Name + ":" + tc.Function.Arguments + "|"
 					l.logger.Info("🤖 Assistant tool call",
+						zap.String("trace_id", traceID),
 						zap.String("tool", tc.Function.Name),
 						zap.String("args", tc.Function.Arguments),
 						zap.String("call_id", tc.ID),
@@ -656,6 +750,7 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 					repeatCount++
 					if repeatCount >= maxRepeatErrors {
 						l.logger.Warn("🔄 检测到工具调用死循环，强制终止",
+							zap.String("trace_id", traceID),
 							zap.String("tool_sig", toolSig),
 							zap.Int("repeat_count", repeatCount),
 						)
@@ -740,6 +835,7 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 			}
 
 			l.logger.Info("🔧 Tool result",
+				zap.String("trace_id", traceID),
 				zap.String("tool", toolName),
 				zap.String("call_id", callID),
 				zap.Int64("duration_ms", durationMs),
@@ -775,6 +871,107 @@ func (l *AgentLoop) runWithADK(ctx context.Context, messages []*schema.Message, 
 	}
 
 	return lastContent, nil
+}
+
+func traceIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if traceID, ok := ctx.Value(agentTraceIDContextKey).(string); ok {
+		return traceID
+	}
+	return ""
+}
+
+func withMessageTrace(ctx context.Context, traceID string) context.Context {
+	if ctx == nil || traceID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, agentTraceIDContextKey, traceID)
+}
+
+func buildMessageTraceID(msg *bus.InboundMessage) string {
+	if msg == nil {
+		return ""
+	}
+	if messageID := extractMessageID(msg); messageID != "" {
+		return fmt.Sprintf("%s:%s", msg.Channel, messageID)
+	}
+	ts := msg.Timestamp
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	return fmt.Sprintf("%s:%s:%s:%d", msg.Channel, msg.ChatID, msg.SenderID, ts.UnixNano())
+}
+
+func extractMessageID(msg *bus.InboundMessage) string {
+	if msg == nil || msg.Metadata == nil {
+		return ""
+	}
+	if id, ok := msg.Metadata["message_id"]; ok {
+		return fmt.Sprintf("%v", id)
+	}
+	return ""
+}
+
+func inboundLogFields(msg *bus.InboundMessage, traceID string) []zap.Field {
+	if msg == nil {
+		return []zap.Field{zap.String("trace_id", traceID)}
+	}
+	fields := []zap.Field{
+		zap.String("trace_id", traceID),
+		zap.String("channel", msg.Channel),
+		zap.String("chat_id", msg.ChatID),
+		zap.String("sender_id", msg.SenderID),
+		zap.String("session_key", msg.SessionKey()),
+		zap.String("message_id", extractMessageID(msg)),
+		zap.Int("content_length", len(msg.Content)),
+		zap.String("content_preview", previewText(msg.Content, 160)),
+		zap.Int("media_count", len(msg.Media)),
+	}
+	if !msg.Timestamp.IsZero() {
+		fields = append(fields, zap.Time("timestamp", msg.Timestamp))
+	}
+	return fields
+}
+
+func outboundLogFields(msg *bus.OutboundMessage, traceID string) []zap.Field {
+	if msg == nil {
+		return []zap.Field{zap.String("trace_id", traceID)}
+	}
+	fields := []zap.Field{
+		zap.String("trace_id", traceID),
+		zap.String("channel", msg.Channel),
+		zap.String("chat_id", msg.ChatID),
+		zap.String("reply_to", msg.ReplyTo),
+		zap.Int("content_length", len(msg.Content)),
+		zap.String("content_preview", previewText(msg.Content, 160)),
+		zap.Int("media_count", len(msg.Media)),
+	}
+	if msg.Metadata != nil {
+		if progress, ok := msg.Metadata["_progress"].(bool); ok {
+			fields = append(fields, zap.Bool("is_progress", progress))
+		}
+		if toolHint, ok := msg.Metadata["_tool_hint"].(bool); ok {
+			fields = append(fields, zap.Bool("is_tool_hint", toolHint))
+		}
+		if toolStatus, ok := msg.Metadata["_tool_status"].(string); ok {
+			fields = append(fields, zap.String("tool_status", toolStatus))
+		}
+	}
+	return fields
+}
+
+func previewText(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if text == "" || limit <= 0 {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit]) + "..."
 }
 
 // setToolContext 更新工具上下文
