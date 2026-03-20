@@ -1,19 +1,16 @@
 <div align="center">
 
-```
-    🦐 皮皮虾 · PP-Claw
-    ━━━━━━━━━━━━━━━━━━━
-    ╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱
-   🦀  Personal AI Agent
-    ╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲
-```
+<h1>🦐 皮皮虾 · PP-Claw</h1>
 
-**Go 语言编写的全能个人 AI 助手 Agent**
+<h3>Go 语言编写的全能个人 AI 助手 Agent</h3>
 
-[![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+<p>
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License"></a>
+  <a href="https://github.com/yangkun19921001/PP-Claw"><img src="https://img.shields.io/badge/Based_on-nanobot-orange?style=for-the-badge" alt="Based on nanobot"></a>
+</p>
 
-*18 个 LLM Provider · 11 个消息渠道 · MCP 工具扩展 · 长期记忆 · 子代理 · 定时任务*
+<p><strong>18 个 LLM Provider · 11 个消息渠道 · MCP 工具扩展 · 长期记忆 · 子代理 · 定时任务</strong></p>
 
 </div>
 
