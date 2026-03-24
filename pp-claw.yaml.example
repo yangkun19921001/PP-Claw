@@ -84,6 +84,43 @@ channels:
     mochat:
         enabled: false
         base_url: ""
+    wecom:
+        enabled: false
+        bot_id: ""
+        secret: ""
+        welcome_message: ""
+        allow_from: []
+    matrix:
+        enabled: false
+        homeserver: ""
+        access_token: ""
+        user_id: ""
+        device_id: ""
+        e2ee_enabled: false
+        max_media_bytes: 0
+        allow_from: []
+        group_policy: ""
+        group_allow_from: []
+    wechat_personal:
+        enabled: false
+        state_dir: ""
+        base_url: "https://ilinkai.weixin.qq.com"
+        cdn_base_url: "https://novac2c.cdn.weixin.qq.com/c2c"
+        bot_type: "3"
+        poll_timeout_ms: 35000
+        login_timeout_s: 480
+        session_pause_minutes: 60
+        request_timeout_ms: 15000
+        config_timeout_ms: 10000
+        allow_from: []
+        accounts:
+            wx1:
+                enabled: true
+                base_url: ""
+                cdn_base_url: ""
+                bot_type: ""
+                allow_from: []
+                ilink_user_id: ""
 providers:
     custom:
         api_key: ""

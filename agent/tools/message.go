@@ -12,9 +12,10 @@ type MessageTool struct {
 	SendCallback    func(*bus.OutboundMessage)
 	SendWithContext func(context.Context, *bus.OutboundMessage)
 	channel         string
+	accountID       string
 	chatID          string
 	replyTo         string // 当前会话的 message_id，用于引用回复
-	SentInTurn bool
+	SentInTurn      bool
 }
 
 func (t *MessageTool) Name() string { return "message" }
@@ -40,6 +41,13 @@ func (t *MessageTool) Parameters() map[string]any {
 
 func (t *MessageTool) SetContext(channel, chatID string) {
 	t.channel = channel
+	t.chatID = chatID
+}
+
+// SetContextWithAccount 设置带账号维度的上下文
+func (t *MessageTool) SetContextWithAccount(channel, accountID, chatID string) {
+	t.channel = channel
+	t.accountID = accountID
 	t.chatID = chatID
 }
 
@@ -90,6 +98,7 @@ func (t *MessageTool) Execute(ctx context.Context, params map[string]any) (strin
 	}
 
 	msg := bus.NewOutboundMessage(channel, chatID, content)
+	msg.AccountID = t.accountID
 	msg.Media = media
 	msg.ReplyTo = t.replyTo
 	if t.SendWithContext != nil {

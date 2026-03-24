@@ -297,7 +297,7 @@ func (s *Service) ListJobs(includeDisabled bool) []CronJob {
 }
 
 // AddJob 添加任务 (对标 service.py:add_job)
-func (s *Service) AddJob(name string, schedule CronSchedule, message string, deliver bool, channel, to string, deleteAfterRun bool) *CronJob {
+func (s *Service) AddJob(name string, schedule CronSchedule, message string, deliver bool, channel, account, to string, deleteAfterRun bool) *CronJob {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -314,6 +314,7 @@ func (s *Service) AddJob(name string, schedule CronSchedule, message string, del
 			Message: message,
 			Deliver: deliver,
 			Channel: channel,
+			Account: account,
 			To:      to,
 		},
 		State:          CronJobState{NextRunAtMs: computeNextRun(schedule, now)},

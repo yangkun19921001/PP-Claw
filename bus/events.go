@@ -5,6 +5,7 @@ import "time"
 // InboundMessage 从渠道收到的消息 (对标 pp-claw/bus/events.py:InboundMessage)
 type InboundMessage struct {
 	Channel            string         `json:"channel"`                        // telegram, discord, slack, cli...
+	AccountID          string         `json:"account_id,omitempty"`           // 渠道账号标识（多账号场景）
 	SenderID           string         `json:"sender_id"`                      // 用户标识
 	ChatID             string         `json:"chat_id"`                        // 会话标识
 	Content            string         `json:"content"`                        // 消息文本
@@ -18,6 +19,9 @@ type InboundMessage struct {
 func (m *InboundMessage) SessionKey() string {
 	if m.SessionKeyOverride != "" {
 		return m.SessionKeyOverride
+	}
+	if m.AccountID != "" {
+		return m.Channel + ":" + m.AccountID + ":" + m.ChatID
 	}
 	return m.Channel + ":" + m.ChatID
 }
@@ -37,12 +41,13 @@ func NewInboundMessage(channel, senderID, chatID, content string) *InboundMessag
 
 // OutboundMessage 发送到渠道的消息 (对标 pp-claw/bus/events.py:OutboundMessage)
 type OutboundMessage struct {
-	Channel  string         `json:"channel"`
-	ChatID   string         `json:"chat_id"`
-	Content  string         `json:"content"`
-	ReplyTo  string         `json:"reply_to,omitempty"`
-	Media    []string       `json:"media"`
-	Metadata map[string]any `json:"metadata"`
+	Channel   string         `json:"channel"`
+	AccountID string         `json:"account_id,omitempty"`
+	ChatID    string         `json:"chat_id"`
+	Content   string         `json:"content"`
+	ReplyTo   string         `json:"reply_to,omitempty"`
+	Media     []string       `json:"media"`
+	Metadata  map[string]any `json:"metadata"`
 }
 
 // NewOutboundMessage 创建出站消息

@@ -3,6 +3,7 @@ package channels
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/yangkun19921001/PP-Claw/bus"
 	"go.uber.org/zap"
@@ -16,9 +17,20 @@ type Channel interface {
 	Send(msg *bus.OutboundMessage) error
 }
 
+// RouteRegistrar 可选能力：向 gateway 注册 HTTP 路由
+type RouteRegistrar interface {
+	RegisterRoutes(mux *http.ServeMux)
+}
+
+// StatusProvider 可选能力：返回渠道运行状态
+type StatusProvider interface {
+	Status() map[string]any
+}
+
 // BaseChannel 渠道基类
 type BaseChannel struct {
 	ChannelName string
+	AccountID   string
 	Bus         *bus.MessageBus
 	AllowFrom   []string
 	Logger      *zap.Logger
@@ -49,12 +61,13 @@ func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []st
 	}
 
 	msg := &bus.InboundMessage{
-		Channel:  c.ChannelName,
-		SenderID: senderID,
-		ChatID:   chatID,
-		Content:  content,
-		Media:    media,
-		Metadata: metadata,
+		Channel:   c.ChannelName,
+		AccountID: c.AccountID,
+		SenderID:  senderID,
+		ChatID:    chatID,
+		Content:   content,
+		Media:     media,
+		Metadata:  metadata,
 	}
 	if msg.Media == nil {
 		msg.Media = []string{}
@@ -64,6 +77,11 @@ func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []st
 	}
 
 	c.Bus.PublishInbound(msg)
+}
+
+// SetAccountID 绑定当前渠道实例的账号 ID
+func (c *BaseChannel) SetAccountID(accountID string) {
+	c.AccountID = accountID
 }
 
 // ChannelFactory 渠道工厂函数类型

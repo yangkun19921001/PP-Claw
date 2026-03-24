@@ -7,9 +7,10 @@ import (
 
 // SpawnTool 生成子代理工具 (对标 agent/tools/spawn.py:SpawnTool)
 type SpawnTool struct {
-	SpawnFunc     func(ctx context.Context, task, label, channel, chatID string) string
-	originChannel string
-	originChatID  string
+	SpawnFunc       func(ctx context.Context, task, label, channel, accountID, chatID string) string
+	originChannel   string
+	originAccountID string
+	originChatID    string
 }
 
 func (t *SpawnTool) Name() string { return "spawn" }
@@ -56,12 +57,19 @@ func (t *SpawnTool) Execute(ctx context.Context, params map[string]any) (string,
 	if t.SpawnFunc == nil {
 		return "Subagent spawning is not configured", nil
 	}
-	return t.SpawnFunc(ctx, task, label, channel, chatID), nil
+	return t.SpawnFunc(ctx, task, label, channel, t.originAccountID, chatID), nil
 }
 
 // SetContext 实现 ContextSetter 接口
 func (t *SpawnTool) SetContext(channel, chatID string) {
 	t.originChannel = channel
+	t.originChatID = chatID
+}
+
+// SetContextWithAccount 实现 AccountContextSetter 接口
+func (t *SpawnTool) SetContextWithAccount(channel, accountID, chatID string) {
+	t.originChannel = channel
+	t.originAccountID = accountID
 	t.originChatID = chatID
 }
 

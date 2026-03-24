@@ -10,7 +10,7 @@
   <a href="https://github.com/yangkun19921001/PP-Claw"><img src="https://img.shields.io/badge/Based_on-nanobot-orange?style=for-the-badge" alt="Based on nanobot"></a>
 </p>
 
-<p><strong>18 个 LLM Provider · 11 个消息渠道 · MCP 工具扩展 · 长期记忆 · 子代理 · 定时任务</strong></p>
+<p><strong>18 个 LLM Provider · 12 个消息渠道 · MCP 工具扩展 · 长期记忆 · 子代理 · 定时任务</strong></p>
 
 </div>
 
@@ -20,7 +20,7 @@
 
 **PP-Claw（皮皮虾）** 是一个简洁、高效的个人 AI 助手 Agent，基于 [Eino ADK](https://github.com/cloudwego/eino) 构建。本项目参考 Python 版 [nanobot](https://github.com/pinkpiglet/nanobot) 的架构与功能设计，使用 Go 语言完整重新实现，在保持功能对齐的同时充分利用 Go 的并发性能和静态编译优势。
 
-支持接入飞书、Telegram、Discord、Slack、企业微信、Matrix 等 11 个渠道，对接 OpenAI、Anthropic、DeepSeek、Gemini 等 18 个 LLM Provider，并可通过 MCP 协议无限扩展工具能力。
+支持接入飞书、Telegram、Discord、Slack、企业微信、个人微信、Matrix 等 12 个渠道，对接 OpenAI、Anthropic、DeepSeek、Gemini 等 18 个 LLM Provider，并可通过 MCP 协议无限扩展工具能力。
 
 ---
 
@@ -29,7 +29,7 @@
 | 模块 | 能力 |
 |---|---|
 | 🤖 **LLM Provider** | OpenAI / Anthropic / DeepSeek / Gemini / Groq / OpenRouter / Azure OpenAI / 智谱 / 通义千问 / Moonshot / MiniMax / SiliconFlow / 火山引擎 / vLLM 等 **18+** |
-| 💬 **消息渠道** | Telegram / Discord / Slack / 飞书 / 钉钉 / WhatsApp / Email / QQ / MoChat / 企业微信 / Matrix **共 11 个** |
+| 💬 **消息渠道** | Telegram / Discord / Slack / 飞书 / 钉钉 / WhatsApp / Email / QQ / MoChat / 企业微信 / 个人微信 / Matrix **共 12 个** |
 | 🔧 **内置工具** | 文件读写编辑 / Shell 执行 / Web 搜索+抓取 / 消息发送(含媒体) / 子代理 / 定时任务 / 飞书知识库+文档+Aily |
 | 🔌 **MCP 协议** | Stdio / SSE / Streamable HTTP 三种传输，自动发现注册工具 |
 | 🧠 **智能记忆** | LLM 驱动双层记忆（MEMORY.md 长期事实 + HISTORY.md 事件日志），Token 级自动整合 |
@@ -209,6 +209,7 @@ providers:
 | **Discord** | Gateway WebSocket | Intents 配置 |
 | **Slack** | Socket Mode | Thread 回复 / 表情反应 / 群聊策略(open/mention/allowlist) / DM 策略 |
 | **企业微信** | WebSocket | 欢迎消息 / 流式回复 / 去重 |
+| **个人微信** | ClawBot HTTP JSON API | Gateway 托管登录 / 多账号同时在线 / context token 回复 / CDN 媒体收发 |
 | **Matrix** | Sync 长轮询 | E2EE 端到端加密 / Thread 支持 / Typing 指示器 / Markdown→HTML |
 | **钉钉** | SDK | Client ID/Secret 认证 |
 | **WhatsApp** | Bridge WebSocket | Matrix Bridge 模式 |
@@ -261,6 +262,36 @@ channels:
     secret: "your-secret"
     welcome_message: "你好！我是皮皮虾 🦐"
 ```
+
+</details>
+
+<details>
+<summary>个人微信配置示例</summary>
+
+```yaml
+channels:
+  wechat_personal:
+    enabled: true
+    base_url: "https://ilinkai.weixin.qq.com"
+    cdn_base_url: "https://novac2c.cdn.weixin.qq.com/c2c"
+    bot_type: "3"
+    login_timeout_s: 480
+    accounts:
+      wx1:
+        enabled: true
+```
+
+首次登录：
+
+```bash
+# 1. 先启动 gateway
+pp-claw gateway
+
+# 2. 在另一个终端执行登录命令
+pp-claw channels wechat login --account wx1
+```
+
+命令会优先在终端直接渲染二维码，同时也会打印二维码链接。用手机微信扫码并确认后，账号会自动保存到本地，后续重启 gateway 会自动接入。
 
 </details>
 
@@ -430,6 +461,8 @@ tools:
 | `pp-claw agent -m "..."` | 单次对话 |
 | `pp-claw status` | 运行状态 |
 | `pp-claw channels status` | 渠道状态 |
+| `pp-claw channels wechat login --account wx1` | 通过 gateway 发起个人微信扫码登录 |
+| `pp-claw channels wechat status` | 查看个人微信运行状态 |
 | `pp-claw cron list/add/remove/run/enable` | 定时任务管理 |
 | `pp-claw version` | 版本信息 |
 
@@ -455,7 +488,7 @@ PP-Claw/
 │   ├── subagent.go              # 子代理管理器
 │   └── tools/                   # 13+ 内置工具
 ├── bus/                         # 消息总线
-├── channels/                    # 11 个渠道实现
+├── channels/                    # 12 个渠道实现
 ├── config/                      # 配置 Schema + YAML 加载
 ├── providers/                   # 18 Provider + Azure OpenAI
 ├── session/                     # 会话管理 (JSONL 持久化)

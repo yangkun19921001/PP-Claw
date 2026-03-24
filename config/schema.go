@@ -29,19 +29,20 @@ type AgentDefaults struct {
 
 // ChannelsConfig 渠道配置
 type ChannelsConfig struct {
-	SendProgress  bool           `yaml:"send_progress"`
-	SendToolHints bool           `yaml:"send_tool_hints"`
-	Telegram      TelegramConfig `yaml:"telegram"`
-	Discord       DiscordConfig  `yaml:"discord"`
-	Slack         SlackConfig    `yaml:"slack"`
-	WhatsApp      WhatsAppConfig `yaml:"whatsapp"`
-	Feishu        FeishuConfig   `yaml:"feishu"`
-	DingTalk      DingTalkConfig `yaml:"dingtalk"`
-	Email         EmailConfig    `yaml:"email"`
-	QQ            QQConfig       `yaml:"qq"`
-	Mochat        MochatConfig   `yaml:"mochat"`
-	Wecom         WecomConfig    `yaml:"wecom"`
-	Matrix        MatrixConfig   `yaml:"matrix"`
+	SendProgress   bool                 `yaml:"send_progress"`
+	SendToolHints  bool                 `yaml:"send_tool_hints"`
+	Telegram       TelegramConfig       `yaml:"telegram"`
+	Discord        DiscordConfig        `yaml:"discord"`
+	Slack          SlackConfig          `yaml:"slack"`
+	WhatsApp       WhatsAppConfig       `yaml:"whatsapp"`
+	Feishu         FeishuConfig         `yaml:"feishu"`
+	DingTalk       DingTalkConfig       `yaml:"dingtalk"`
+	Email          EmailConfig          `yaml:"email"`
+	QQ             QQConfig             `yaml:"qq"`
+	Mochat         MochatConfig         `yaml:"mochat"`
+	Wecom          WecomConfig          `yaml:"wecom"`
+	Matrix         MatrixConfig         `yaml:"matrix"`
+	WechatPersonal WechatPersonalConfig `yaml:"wechat_personal"`
 }
 
 // ProviderConfig 单个 LLM Provider 配置
@@ -191,9 +192,9 @@ type FeishuConfig struct {
 	EncryptKey          string   `yaml:"encrypt_key"`
 	VerificationToken   string   `yaml:"verification_token"`
 	AllowFrom           []string `yaml:"allow_from"`
-	GroupPolicy         string   `yaml:"group_policy"`      // "open"/"mention", default "mention"
-	ReactEmoji          string   `yaml:"react_emoji"`       // default "THUMBSUP"
-	ReplyToMessage      bool     `yaml:"reply_to_message"`  // reply to the original message
+	GroupPolicy         string   `yaml:"group_policy"`     // "open"/"mention", default "mention"
+	ReactEmoji          string   `yaml:"react_emoji"`      // default "THUMBSUP"
+	ReplyToMessage      bool     `yaml:"reply_to_message"` // reply to the original message
 	WikiEnabled         bool     `yaml:"wiki_enabled"`
 	DocsEnabled         bool     `yaml:"docs_enabled"`
 	OAuthRedirectURL    string   `yaml:"oauth_redirect_url"`      // OAuth 回调地址，复用 gateway 端口，如 http://localhost:18790/feishu/oauth/callback
@@ -262,24 +263,51 @@ type MatrixConfig struct {
 	E2EEEnabled    bool     `yaml:"e2ee_enabled"`
 	MaxMediaBytes  int      `yaml:"max_media_bytes"`
 	AllowFrom      []string `yaml:"allow_from"`
-	GroupPolicy    string   `yaml:"group_policy"`      // "open"/"mention"/"allowlist"
+	GroupPolicy    string   `yaml:"group_policy"` // "open"/"mention"/"allowlist"
 	GroupAllowFrom []string `yaml:"group_allow_from"`
+}
+
+// WechatPersonalConfig 个人微信 ClawBot 风格渠道配置
+type WechatPersonalConfig struct {
+	Enabled             bool                                   `yaml:"enabled"`
+	StateDir            string                                 `yaml:"state_dir"`
+	BaseURL             string                                 `yaml:"base_url"`
+	CDNBaseURL          string                                 `yaml:"cdn_base_url"`
+	BotType             string                                 `yaml:"bot_type"`
+	PollTimeoutMS       int                                    `yaml:"poll_timeout_ms"`
+	LoginTimeoutS       int                                    `yaml:"login_timeout_s"`
+	SessionPauseMinutes int                                    `yaml:"session_pause_minutes"`
+	RequestTimeoutMS    int                                    `yaml:"request_timeout_ms"`
+	ConfigTimeoutMS     int                                    `yaml:"config_timeout_ms"`
+	AllowFrom           []string                               `yaml:"allow_from"`
+	Accounts            map[string]WechatPersonalAccountConfig `yaml:"accounts"`
+}
+
+// WechatPersonalAccountConfig 单个微信账号配置
+type WechatPersonalAccountConfig struct {
+	Enabled     bool     `yaml:"enabled"`
+	BaseURL     string   `yaml:"base_url"`
+	CDNBaseURL  string   `yaml:"cdn_base_url"`
+	BotType     string   `yaml:"bot_type"`
+	AllowFrom   []string `yaml:"allow_from"`
+	ILinkUserID string   `yaml:"ilink_user_id"`
 }
 
 // GetEnabledMap 返回 channel_name → enabled 映射，用于动态发现
 func (c *ChannelsConfig) GetEnabledMap() map[string]bool {
 	return map[string]bool{
-		"telegram": c.Telegram.Enabled,
-		"discord":  c.Discord.Enabled,
-		"slack":    c.Slack.Enabled,
-		"feishu":   c.Feishu.Enabled,
-		"dingtalk":  c.DingTalk.Enabled,
-		"whatsapp": c.WhatsApp.Enabled,
-		"email":    c.Email.Enabled,
-		"qq":       c.QQ.Enabled,
-		"mochat":   c.Mochat.Enabled,
-		"wecom":    c.Wecom.Enabled,
-		"matrix":   c.Matrix.Enabled,
+		"telegram":        c.Telegram.Enabled,
+		"discord":         c.Discord.Enabled,
+		"slack":           c.Slack.Enabled,
+		"feishu":          c.Feishu.Enabled,
+		"dingtalk":        c.DingTalk.Enabled,
+		"whatsapp":        c.WhatsApp.Enabled,
+		"email":           c.Email.Enabled,
+		"qq":              c.QQ.Enabled,
+		"mochat":          c.Mochat.Enabled,
+		"wecom":           c.Wecom.Enabled,
+		"matrix":          c.Matrix.Enabled,
+		"wechat_personal": c.WechatPersonal.Enabled,
 	}
 }
 
@@ -288,11 +316,11 @@ func DefaultConfig() *Config {
 	return &Config{
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
-				Workspace:         "~/.pp-claw/workspace",
-				Model:             "anthropic/claude-opus-4-5",
-				MaxTokens:         8192,
-				Temperature:       0.1,
-				MaxToolIterations: 40,
+				Workspace:           "~/.pp-claw/workspace",
+				Model:               "anthropic/claude-opus-4-5",
+				MaxTokens:           8192,
+				Temperature:         0.1,
+				MaxToolIterations:   40,
 				MemoryWindow:        100,
 				ContextWindowTokens: 65536,
 			},
@@ -302,6 +330,17 @@ func DefaultConfig() *Config {
 			SendToolHints: true,
 			Feishu: FeishuConfig{
 				ReplyToMessage: true,
+			},
+			WechatPersonal: WechatPersonalConfig{
+				BaseURL:             "https://ilinkai.weixin.qq.com",
+				CDNBaseURL:          "https://novac2c.cdn.weixin.qq.com/c2c",
+				BotType:             "3",
+				PollTimeoutMS:       35000,
+				LoginTimeoutS:       480,
+				SessionPauseMinutes: 60,
+				RequestTimeoutMS:    15000,
+				ConfigTimeoutMS:     10000,
+				Accounts:            map[string]WechatPersonalAccountConfig{},
 			},
 		},
 		Gateway: GatewayConfig{

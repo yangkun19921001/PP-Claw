@@ -62,7 +62,7 @@ func NewSubagentManager(workspace string, msgBus *bus.MessageBus, model string, 
 }
 
 // Spawn 生成后台子代理 (对标 subagent.py:spawn)
-func (m *SubagentManager) Spawn(ctx context.Context, task string, label string, originChannel, originChatID string) string {
+func (m *SubagentManager) Spawn(ctx context.Context, task string, label string, originChannel, originAccountID, originChatID string) string {
 	taskID := uuid.New().String()[:8]
 	displayLabel := label
 	if displayLabel == "" {
@@ -73,6 +73,9 @@ func (m *SubagentManager) Spawn(ctx context.Context, task string, label string, 
 	}
 
 	sessionKey := originChannel + ":" + originChatID
+	if originAccountID != "" {
+		sessionKey = originChannel + ":" + originAccountID + ":" + originChatID
+	}
 	ctx2, cancel := context.WithCancel(ctx)
 
 	m.mu.Lock()
@@ -83,14 +86,14 @@ func (m *SubagentManager) Spawn(ctx context.Context, task string, label string, 
 	m.sessionTasks[sessionKey][taskID] = cancel
 	m.mu.Unlock()
 
-	go m.runSubagent(ctx2, taskID, task, displayLabel, originChannel, originChatID, sessionKey)
+	go m.runSubagent(ctx2, taskID, task, displayLabel, originChannel, originAccountID, originChatID, sessionKey)
 
 	m.logger.Info("子代理已生成", zap.String("id", taskID), zap.String("label", displayLabel))
 	return fmt.Sprintf("Subagent [%s] started (id: %s). I'll notify you when it completes.", displayLabel, taskID)
 }
 
 // runSubagent 执行子代理任务 — 真实 LLM 循环 (对标 subagent.py:_run_subagent)
-func (m *SubagentManager) runSubagent(ctx context.Context, taskID, task, label, originChannel, originChatID, sessionKey string) {
+func (m *SubagentManager) runSubagent(ctx context.Context, taskID, task, label, originChannel, originAccountID, originChatID, sessionKey string) {
 	defer func() {
 		m.mu.Lock()
 		delete(m.runningTasks, taskID)
@@ -123,7 +126,7 @@ func (m *SubagentManager) runSubagent(ctx context.Context, taskID, task, label, 
 	if m.chatModel == nil {
 		m.logger.Warn("子代理: chatModel 未设置，使用 stub 模式")
 		finalResult := fmt.Sprintf("Subagent [%s] completed task: %s", label, task)
-		m.announceResult(taskID, label, task, finalResult, originChannel, originChatID, "ok")
+		m.announceResult(taskID, label, task, finalResult, originChannel, originAccountID, originChatID, "ok")
 		return
 	}
 
@@ -142,7 +145,7 @@ func (m *SubagentManager) runSubagent(ctx context.Context, taskID, task, label, 
 	boundModel, err := m.chatModel.WithTools(toolInfos)
 	if err != nil {
 		m.logger.Error("子代理: 绑定工具失败", zap.String("id", taskID), zap.Error(err))
-		m.announceResult(taskID, label, task, "Failed to initialize: "+err.Error(), originChannel, originChatID, "error")
+		m.announceResult(taskID, label, task, "Failed to initialize: "+err.Error(), originChannel, originAccountID, originChatID, "error")
 		return
 	}
 
@@ -159,7 +162,7 @@ func (m *SubagentManager) runSubagent(ctx context.Context, taskID, task, label, 
 		select {
 		case <-ctx.Done():
 			m.logger.Info("子代理被取消", zap.String("id", taskID))
-			m.announceResult(taskID, label, task, "Cancelled", originChannel, originChatID, "cancelled")
+			m.announceResult(taskID, label, task, "Cancelled", originChannel, originAccountID, originChatID, "cancelled")
 			return
 		default:
 		}
@@ -173,7 +176,7 @@ func (m *SubagentManager) runSubagent(ctx context.Context, taskID, task, label, 
 				result = lastContent
 				status = "partial"
 			}
-			m.announceResult(taskID, label, task, result, originChannel, originChatID, status)
+			m.announceResult(taskID, label, task, result, originChannel, originAccountID, originChatID, status)
 			return
 		}
 
@@ -205,7 +208,7 @@ func (m *SubagentManager) runSubagent(ctx context.Context, taskID, task, label, 
 		lastContent = fmt.Sprintf("Subagent [%s] completed task but produced no output.", label)
 	}
 
-	m.announceResult(taskID, label, task, lastContent, originChannel, originChatID, "ok")
+	m.announceResult(taskID, label, task, lastContent, originChannel, originAccountID, originChatID, "ok")
 }
 
 // executeToolCall executes a single tool call and returns the result string.
@@ -256,7 +259,7 @@ func (m *SubagentManager) CancelBySession(sessionKey string) int {
 }
 
 // announceResult 回报子代理结果 (对标 subagent.py:_announce_result)
-func (m *SubagentManager) announceResult(taskID, label, task, result, originChannel, originChatID, status string) {
+func (m *SubagentManager) announceResult(taskID, label, task, result, originChannel, originAccountID, originChatID, status string) {
 	// Evaluate if the result warrants notification
 	if m.chatModel != nil && status == "ok" {
 		ctx := context.Background()
@@ -285,10 +288,14 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
 		label, statusText, task, result)
 
 	msg := &bus.InboundMessage{
-		Channel:  "system",
-		SenderID: "subagent",
-		ChatID:   fmt.Sprintf("%s:%s", originChannel, originChatID),
-		Content:  content,
+		Channel:   "system",
+		AccountID: originAccountID,
+		SenderID:  "subagent",
+		ChatID:    originChatID,
+		Content:   content,
+		Metadata: map[string]any{
+			"target_channel": originChannel,
+		},
 	}
 
 	m.bus.PublishInbound(msg)

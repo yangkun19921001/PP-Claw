@@ -2,6 +2,7 @@ package channels
 
 import (
 	"context"
+	"net/http"
 	"sync"
 
 	"github.com/yangkun19921001/PP-Claw/bus"
@@ -150,6 +151,41 @@ func (m *Manager) GetStatus() map[string]bool {
 	return status
 }
 
+// RegisterRoutes 将支持的 channel HTTP 路由挂载到 gateway mux
+func (m *Manager) RegisterRoutes(mux *http.ServeMux) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for name, ch := range m.channels {
+		registrar, ok := ch.(RouteRegistrar)
+		if !ok {
+			continue
+		}
+		registrar.RegisterRoutes(mux)
+		m.logger.Info("渠道路由已注册", zap.String("channel", name))
+	}
+}
+
+// StatusSnapshot 返回带运行信息的渠道状态快照
+func (m *Manager) StatusSnapshot() map[string]any {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	snapshot := make(map[string]any, len(m.channels))
+	for name, ch := range m.channels {
+		entry := map[string]any{
+			"enabled": true,
+		}
+		if provider, ok := ch.(StatusProvider); ok {
+			for k, v := range provider.Status() {
+				entry[k] = v
+			}
+		}
+		snapshot[name] = entry
+	}
+	return snapshot
+}
+
 // EnabledChannels 获取已启用渠道列表
 func (m *Manager) EnabledChannels() []string {
 	var names []string
@@ -189,6 +225,14 @@ func (m *Manager) configureChannel(name string, ch Channel) {
 		if mc, ok := ch.(matrixConfigurable); ok {
 			cfg := m.config.Channels.Matrix
 			mc.Configure(cfg.Homeserver, cfg.AccessToken, cfg.UserID, cfg.DeviceID, cfg.E2EEEnabled, cfg.MaxMediaBytes, cfg.AllowFrom, cfg.GroupPolicy, cfg.GroupAllowFrom)
+		}
+	case "wechat_personal":
+		type wechatPersonalConfigurable interface {
+			Configure(cfg config.WechatPersonalConfig, workspace string)
+		}
+		if wc, ok := ch.(wechatPersonalConfigurable); ok {
+			workspace := config.ExpandHome(m.config.Agents.Defaults.Workspace)
+			wc.Configure(m.config.Channels.WechatPersonal, workspace)
 		}
 	}
 }

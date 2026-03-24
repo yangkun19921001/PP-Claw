@@ -26,6 +26,11 @@ type ContextSetter interface {
 	SetContext(channel, chatID string)
 }
 
+// AccountContextSetter 需要账号上下文信息的工具实现此接口
+type AccountContextSetter interface {
+	SetContextWithAccount(channel, accountID, chatID string)
+}
+
 // Registry 工具注册表 (对标 pp-claw/agent/tools/registry.py:ToolRegistry)
 type Registry struct {
 	tools  map[string]Tool

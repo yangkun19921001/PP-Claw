@@ -2,10 +2,12 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -136,6 +138,7 @@ func runGateway() error {
 	os.MkdirAll(ws+"/memory", 0755)
 	os.MkdirAll(ws+"/skills", 0755)
 	os.MkdirAll(ws+"/sessions", 0755)
+	os.MkdirAll(ws+"/channels", 0755)
 
 	logger.Info("Workspace", zap.String("path", ws))
 
@@ -155,7 +158,9 @@ func runGateway() error {
 	cronSvc := cron.NewService(ws+"/data/cron/jobs.json", logger)
 	cronSvc.SetOnJob(func(job *cron.CronJob) (string, error) {
 		// 使用原始 channel 和 chatID，确保响应能路由回正确的渠道
-		msgBus.PublishInbound(bus.NewInboundMessage(job.Payload.Channel, "cron", job.Payload.To, job.Payload.Message))
+		inbound := bus.NewInboundMessage(job.Payload.Channel, "cron", job.Payload.To, job.Payload.Message)
+		inbound.AccountID = job.Payload.Account
+		msgBus.PublishInbound(inbound)
 		return "Job dispatched to agent", nil
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -202,6 +207,10 @@ func runGateway() error {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, "ok")
 		})
+		mux.HandleFunc("/channels/status", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(channelMgr.StatusSnapshot())
+		})
 		// 飞书 OAuth 回调
 		if handler := agentLoop.GetFeishuOAuthHandler(); handler != nil {
 			mux.Handle("/feishu/oauth/callback", handler)
@@ -209,6 +218,7 @@ func runGateway() error {
 				zap.String("path", "/feishu/oauth/callback"),
 				zap.Int("port", cfg.Gateway.Port))
 		}
+		channelMgr.RegisterRoutes(mux)
 		gatewayAddr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
 		srv := &http.Server{Addr: gatewayAddr, Handler: mux}
 		go func() {
@@ -553,6 +563,34 @@ func newChannelsCmd() *cobra.Command {
 		},
 	})
 
+	wechatCmd := &cobra.Command{
+		Use:   "wechat",
+		Short: "Manage wechat_personal channel",
+	}
+
+	var wechatAccountID string
+	var wechatTimeoutS int
+	loginCmd := &cobra.Command{
+		Use:   "login",
+		Short: "Start WeChat QR login via the running gateway",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runWechatLogin(wechatAccountID, wechatTimeoutS)
+		},
+	}
+	loginCmd.Flags().StringVar(&wechatAccountID, "account", "", "Target account ID, default auto-generated")
+	loginCmd.Flags().IntVar(&wechatTimeoutS, "timeout", 480, "Wait timeout in seconds")
+	wechatCmd.AddCommand(loginCmd)
+
+	wechatCmd.AddCommand(&cobra.Command{
+		Use:   "status",
+		Short: "Show wechat_personal runtime status from gateway",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return showWechatGatewayStatus()
+		},
+	})
+
+	cmd.AddCommand(wechatCmd)
+
 	return cmd
 }
 
@@ -576,6 +614,178 @@ func showChannelStatus() error {
 			status = "enabled"
 		}
 		fmt.Printf("  %-12s %s\n", name, status)
+		if name == "wechat_personal" && enabled {
+			fmt.Printf("  %-12s accounts=%d\n", "", len(cfg.Channels.WechatPersonal.Accounts))
+		}
+	}
+	return nil
+}
+
+func gatewayBaseURLFromConfig(cfg *config.Config) string {
+	host := strings.TrimSpace(cfg.Gateway.Host)
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("http://%s:%d", host, cfg.Gateway.Port)
+}
+
+func gatewayJSONRequest(method, endpoint string, body any, out any) error {
+	cfgPath := cfgFile
+	if cfgPath == "" {
+		home, _ := os.UserHomeDir()
+		cfgPath = home + "/.pp-claw/pp-claw.yaml"
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("加载配置失败: %w", err)
+	}
+
+	var reader *bytes.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reader = bytes.NewReader(data)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
+
+	req, err := http.NewRequest(method, gatewayBaseURLFromConfig(cfg)+endpoint, reader)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("无法连接 gateway，请先运行 `pp-claw gateway`: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		if resp.StatusCode == http.StatusNotFound && strings.HasPrefix(endpoint, "/channels/wechat_personal/") {
+			return fmt.Errorf("gateway 未注册 wechat_personal 路由。通常是因为: 1) gateway 不是最新编译版本 2) 运行中的配置里 `channels.wechat_personal.enabled` 不是 true 3) gateway 还没重启。原始响应: %s", string(raw))
+		}
+		return fmt.Errorf("gateway %s %s 返回 %d: %s", method, endpoint, resp.StatusCode, string(raw))
+	}
+	if out != nil && len(raw) > 0 {
+		if err := json.Unmarshal(raw, out); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runWechatLogin(accountID string, timeoutS int) error {
+	fmt.Println("微信登录向导")
+	fmt.Println("1. 确保 `pp-claw gateway` 已经在另一个终端运行")
+	fmt.Println("2. 执行本命令后，会生成一个二维码链接")
+	fmt.Println("3. 用手机微信扫码并确认授权")
+	fmt.Println()
+
+	var startResp struct {
+		SessionKey string `json:"session_key"`
+		AccountID  string `json:"account_id"`
+		QRCodeURL  string `json:"qrcode_url"`
+		Message    string `json:"message"`
+	}
+	if err := gatewayJSONRequest(http.MethodPost, "/channels/wechat_personal/login/start", map[string]any{
+		"account_id": accountID,
+	}, &startResp); err != nil {
+		return err
+	}
+
+	fmt.Printf("账号 ID: %s\n", startResp.AccountID)
+	fmt.Printf("二维码链接: %s\n", startResp.QRCodeURL)
+	fmt.Printf("提示: %s\n", startResp.Message)
+	if err := renderWechatQRCodeToTerminal(startResp.QRCodeURL); err == nil {
+		fmt.Println("上面已经尝试在终端渲染二维码，可直接扫码。")
+	} else {
+		fmt.Printf("终端二维码渲染失败: %v\n", err)
+	}
+	fmt.Println("如果终端无法直接扫码，请把上面的二维码链接复制到浏览器打开。")
+	fmt.Println()
+
+	var waitResp struct {
+		Connected bool   `json:"connected"`
+		AccountID string `json:"account_id"`
+		UserID    string `json:"user_id"`
+		BaseURL   string `json:"base_url"`
+		Message   string `json:"message"`
+	}
+	if err := gatewayJSONRequest(http.MethodPost, "/channels/wechat_personal/login/wait", map[string]any{
+		"session_key": startResp.SessionKey,
+		"timeout_ms":  timeoutS * 1000,
+	}, &waitResp); err != nil {
+		return err
+	}
+
+	if !waitResp.Connected {
+		fmt.Println(waitResp.Message)
+		return nil
+	}
+
+	fmt.Println("登录成功")
+	fmt.Printf("账号 ID: %s\n", waitResp.AccountID)
+	if waitResp.UserID != "" {
+		fmt.Printf("微信用户 ID: %s\n", waitResp.UserID)
+	}
+	if waitResp.BaseURL != "" {
+		fmt.Printf("后端地址: %s\n", waitResp.BaseURL)
+	}
+	fmt.Println("这个账号已经保存到本地，之后重新启动 gateway 会自动接入。")
+	return nil
+}
+
+func showWechatGatewayStatus() error {
+	var resp struct {
+		Accounts []struct {
+			AccountID     string `json:"account_id"`
+			Active        bool   `json:"active"`
+			LoggedIn      bool   `json:"logged_in"`
+			ILinkUserID   string `json:"ilink_user_id"`
+			LastError     string `json:"last_error"`
+			BaseURL       string `json:"base_url"`
+			LastMessageAt string `json:"last_message_at"`
+		} `json:"accounts"`
+	}
+	if err := gatewayJSONRequest(http.MethodGet, "/channels/wechat_personal/status", nil, &resp); err != nil {
+		return err
+	}
+
+	if len(resp.Accounts) == 0 {
+		fmt.Println("当前没有已登录的微信账号。")
+		return nil
+	}
+
+	fmt.Println("wechat_personal 状态:")
+	for _, account := range resp.Accounts {
+		running := "stopped"
+		if account.Active {
+			running = "running"
+		}
+		loggedIn := "not-logged-in"
+		if account.LoggedIn {
+			loggedIn = "logged-in"
+		}
+		fmt.Printf("  - %s  %s  %s\n", account.AccountID, running, loggedIn)
+		if account.ILinkUserID != "" {
+			fmt.Printf("    user_id: %s\n", account.ILinkUserID)
+		}
+		if account.BaseURL != "" {
+			fmt.Printf("    base_url: %s\n", account.BaseURL)
+		}
+		if account.LastError != "" {
+			fmt.Printf("    last_error: %s\n", account.LastError)
+		}
 	}
 	return nil
 }
@@ -781,7 +991,7 @@ func cronAdd(name, message string, every int, cronExpr, tz, at string, deliver b
 	}
 
 	svc := getCronService()
-	job := svc.AddJob(name, schedule, message, deliver, channel, to, deleteAfterRun)
+	job := svc.AddJob(name, schedule, message, deliver, channel, "", to, deleteAfterRun)
 	fmt.Printf("✅ Added job '%s' (id: %s)\n", job.Name, job.ID)
 	fmt.Printf("   Schedule: %s\n", formatSchedule(job.Schedule))
 	return nil

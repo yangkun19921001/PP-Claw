@@ -15,7 +15,8 @@ type CronPayload struct {
 	Message string `json:"message"` // 消息内容
 	Deliver bool   `json:"deliver"` // 是否投递到渠道
 	Channel string `json:"channel"` // 目标渠道
-	To      string `json:"to"`      // 目标用户
+	Account string `json:"account,omitempty"`
+	To      string `json:"to"` // 目标用户
 }
 
 // CronJobState 任务运行状态 (对标 cron/types.py:CronJobState)

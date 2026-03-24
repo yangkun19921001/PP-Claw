@@ -12,6 +12,7 @@ import (
 type CronTool struct {
 	CronService *cron.Service
 	channel     string
+	accountID   string
 	chatID      string
 }
 
@@ -124,7 +125,7 @@ func (t *CronTool) addJob(message string, everySeconds int64, cronExpr, tz, at s
 		name = name[:30]
 	}
 
-	job := t.CronService.AddJob(name, schedule, message, true, t.channel, t.chatID, deleteAfter)
+	job := t.CronService.AddJob(name, schedule, message, true, t.channel, t.accountID, t.chatID, deleteAfter)
 	return fmt.Sprintf("Created job '%s' (id: %s)", job.Name, job.ID), nil
 }
 
@@ -161,6 +162,13 @@ func (t *CronTool) removeJob(jobID string) (string, error) {
 // SetContext 实现 ContextSetter 接口
 func (t *CronTool) SetContext(channel, chatID string) {
 	t.channel = channel
+	t.chatID = chatID
+}
+
+// SetContextWithAccount 设置带账号维度的上下文
+func (t *CronTool) SetContextWithAccount(channel, accountID, chatID string) {
+	t.channel = channel
+	t.accountID = accountID
 	t.chatID = chatID
 }
 

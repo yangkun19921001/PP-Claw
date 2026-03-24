@@ -166,8 +166,8 @@ func (l *AgentLoop) registerDefaultTools() {
 
 	// 子代理工具 (对标 loop.py: spawn tool)
 	l.tools.Register(&tools.SpawnTool{
-		SpawnFunc: func(ctx context.Context, task, label, channel, chatID string) string {
-			return l.subagents.Spawn(ctx, task, label, channel, chatID)
+		SpawnFunc: func(ctx context.Context, task, label, channel, accountID, chatID string) string {
+			return l.subagents.Spawn(ctx, task, label, channel, accountID, chatID)
 		},
 	})
 
@@ -275,6 +275,7 @@ func (l *AgentLoop) Run(ctx context.Context) error {
 				msg.Channel, msg.ChatID,
 				fmt.Sprintf("Sorry, I encountered an error: %s", err.Error()),
 			)
+			errMsg.AccountID = msg.AccountID
 			errMsg.ReplyTo = extractReplyTo(msg)
 			l.logger.Info("消息链路: 发布错误响应",
 				append(
@@ -408,7 +409,7 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	l.logger.Info("消息链路: 进入处理流水线", inboundLogFields(msg, traceID)...)
 
 	// 更新工具上下文
-	l.setToolContext(msg.Channel, msg.ChatID)
+	l.setToolContext(msg.Channel, msg.AccountID, msg.ChatID)
 
 	// 开始新的对话回复回合
 	replyTo := extractReplyTo(msg)
@@ -440,12 +441,14 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 		l.sessions.Save(sess)
 		result = "command_new"
 		response = bus.NewOutboundMessage(msg.Channel, msg.ChatID, "New session started.")
+		response.AccountID = msg.AccountID
 		return response, nil
 	}
 	if cmd == "/help" {
 		result = "command_help"
 		response = bus.NewOutboundMessage(msg.Channel, msg.ChatID,
 			"🦞 pp-claw commands:\n/new — Start a new conversation\n/help — Show available commands")
+		response.AccountID = msg.AccountID
 		return response, nil
 	}
 
@@ -510,6 +513,7 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	// 构建 progress 回调（replyTo 已在上方定义）
 	onProgress := func(evt ToolProgressEvent) {
 		progressMsg := bus.NewOutboundMessage(msg.Channel, msg.ChatID, evt.Content)
+		progressMsg.AccountID = msg.AccountID
 		progressMsg.ReplyTo = replyTo
 		progressMsg.Metadata["_progress"] = true
 
@@ -623,6 +627,7 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	}
 
 	out := bus.NewOutboundMessage(msg.Channel, msg.ChatID, finalContent)
+	out.AccountID = msg.AccountID
 	out.ReplyTo = extractReplyTo(msg)
 	result = "final_response_ready"
 	response = out
@@ -655,7 +660,9 @@ func (l *AgentLoop) handleStop(msg *bus.InboundMessage) (*bus.OutboundMessage, e
 		text = "No active tasks to cancel."
 	}
 
-	return bus.NewOutboundMessage(msg.Channel, msg.ChatID, text), nil
+	out := bus.NewOutboundMessage(msg.Channel, msg.ChatID, text)
+	out.AccountID = msg.AccountID
+	return out, nil
 }
 
 // trackTask registers a cancel function for the session.
@@ -688,14 +695,25 @@ func (l *AgentLoop) untrackTask(sessionKey string, cancel context.CancelFunc) {
 
 // handleSystemMessage processes system channel messages (subagent results, etc.)
 func (l *AgentLoop) handleSystemMessage(ctx context.Context, msg *bus.InboundMessage) (*bus.OutboundMessage, error) {
-	// Parse "channel:chatID" from ChatID field
-	parts := strings.SplitN(msg.ChatID, ":", 2)
-	if len(parts) != 2 {
-		l.logger.Warn("系统消息格式错误", zap.String("chat_id", msg.ChatID))
-		return nil, nil
+	targetChannel := msg.Channel
+	targetAccountID := msg.AccountID
+	targetChatID := msg.ChatID
+	if targetChannel == "system" {
+		if msg.Metadata != nil {
+			if v, ok := msg.Metadata["target_channel"].(string); ok && v != "" {
+				targetChannel = v
+			}
+		}
 	}
-	targetChannel := parts[0]
-	targetChatID := parts[1]
+	if targetChannel == "system" {
+		parts := strings.SplitN(msg.ChatID, ":", 2)
+		if len(parts) != 2 {
+			l.logger.Warn("系统消息格式错误", zap.String("chat_id", msg.ChatID))
+			return nil, nil
+		}
+		targetChannel = parts[0]
+		targetChatID = parts[1]
+	}
 
 	// Determine the role: subagent results as assistant, others as user
 	role := "user"
@@ -705,6 +723,9 @@ func (l *AgentLoop) handleSystemMessage(ctx context.Context, msg *bus.InboundMes
 
 	// Get/create session for the target
 	sessionKey := targetChannel + ":" + targetChatID
+	if targetAccountID != "" {
+		sessionKey = targetChannel + ":" + targetAccountID + ":" + targetChatID
+	}
 	sess := l.sessions.GetOrCreate(sessionKey)
 
 	// Add the system message to session history
@@ -742,7 +763,7 @@ func (l *AgentLoop) handleSystemMessage(ctx context.Context, msg *bus.InboundMes
 		})
 	}
 
-	l.setToolContext(targetChannel, targetChatID)
+	l.setToolContext(targetChannel, targetAccountID, targetChatID)
 
 	finalContent, _, err := l.runWithADK(ctx, einoMsgs, nil)
 	if err != nil {
@@ -760,6 +781,7 @@ func (l *AgentLoop) handleSystemMessage(ctx context.Context, msg *bus.InboundMes
 
 	// Send to original channel
 	out := bus.NewOutboundMessage(targetChannel, targetChatID, finalContent)
+	out.AccountID = targetAccountID
 	l.bus.PublishOutbound(out)
 	return nil, nil
 }
@@ -1093,7 +1115,7 @@ func buildMessageTraceID(msg *bus.InboundMessage) string {
 	if ts.IsZero() {
 		ts = time.Now()
 	}
-	return fmt.Sprintf("%s:%s:%s:%d", msg.Channel, msg.ChatID, msg.SenderID, ts.UnixNano())
+	return fmt.Sprintf("%s:%s:%s:%s:%d", msg.Channel, msg.AccountID, msg.ChatID, msg.SenderID, ts.UnixNano())
 }
 
 func extractMessageID(msg *bus.InboundMessage) string {
@@ -1113,6 +1135,7 @@ func inboundLogFields(msg *bus.InboundMessage, traceID string) []zap.Field {
 	fields := []zap.Field{
 		zap.String("trace_id", traceID),
 		zap.String("channel", msg.Channel),
+		zap.String("account_id", msg.AccountID),
 		zap.String("chat_id", msg.ChatID),
 		zap.String("sender_id", msg.SenderID),
 		zap.String("session_key", msg.SessionKey()),
@@ -1134,6 +1157,7 @@ func outboundLogFields(msg *bus.OutboundMessage, traceID string) []zap.Field {
 	fields := []zap.Field{
 		zap.String("trace_id", traceID),
 		zap.String("channel", msg.Channel),
+		zap.String("account_id", msg.AccountID),
 		zap.String("chat_id", msg.ChatID),
 		zap.String("reply_to", msg.ReplyTo),
 		zap.Int("content_length", len(msg.Content)),
@@ -1167,9 +1191,13 @@ func previewText(text string, limit int) string {
 }
 
 // setToolContext 更新工具上下文
-func (l *AgentLoop) setToolContext(channel, chatID string) {
+func (l *AgentLoop) setToolContext(channel, accountID, chatID string) {
 	for _, name := range l.tools.Names() {
 		t := l.tools.Get(name)
+		if setter, ok := t.(tools.AccountContextSetter); ok {
+			setter.SetContextWithAccount(channel, accountID, chatID)
+			continue
+		}
 		if setter, ok := t.(tools.ContextSetter); ok {
 			setter.SetContext(channel, chatID)
 		}
