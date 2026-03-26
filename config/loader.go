@@ -66,32 +66,36 @@ func (c *Config) matchProvider(model string) (*ProviderConfig, string) {
 		prefix = modelLower[:idx]
 	}
 
-	// 按前缀精确匹配
 	providers := c.providerMap()
-	for name, p := range providers {
-		if prefix != "" && prefix == name && p.APIKey != "" {
-			return p, name
-		}
-	}
 
-	// 按关键字匹配
-	keywords := providerKeywords()
-	for name, kws := range keywords {
-		p := providers[name]
-		if p == nil || p.APIKey == "" {
-			continue
-		}
-		for _, kw := range kws {
-			if strings.Contains(modelLower, kw) {
-				return p, name
+	// 按前缀精确匹配。显式指定 provider 时，不要再悄悄回退到其它 provider。
+	if prefix != "" {
+		if p := providers[prefix]; p != nil {
+			if isProviderConfigured(prefix, p) {
+				return p, prefix
 			}
+			return nil, prefix
 		}
 	}
 
-	// 回退到第一个有 API Key 的 Provider
+	// 按 providers.<name>.model 精确匹配。
 	for _, name := range providerOrder() {
 		p := providers[name]
-		if p != nil && p.APIKey != "" {
+		if p == nil || p.Model == "" {
+			continue
+		}
+		if strings.EqualFold(p.Model, model) {
+			if isProviderConfigured(name, p) {
+				return p, name
+			}
+			return nil, name
+		}
+	}
+
+	// 只在完全无法判断 provider 时，才回退到第一个已配置 provider。
+	for _, name := range providerOrder() {
+		p := providers[name]
+		if p != nil && isProviderConfigured(name, p) {
 			return p, name
 		}
 	}
@@ -99,48 +103,47 @@ func (c *Config) matchProvider(model string) (*ProviderConfig, string) {
 	return nil, ""
 }
 
-// providerKeywords 每个 Provider 的关键字 (对标 pp-claw/providers/registry.py)
-func providerKeywords() map[string][]string {
-	return map[string][]string{
-		"anthropic":   {"claude", "anthropic"},
-		"openai":      {"gpt", "o1", "o3", "chatgpt"},
-		"openrouter":  {"openrouter"},
-		"deepseek":    {"deepseek"},
-		"groq":        {"groq"},
-		"zhipu":       {"glm", "zhipu"},
-		"dashscope":   {"qwen", "dashscope", "tongyi"},
-		"vllm":        {"vllm"},
-		"gemini":      {"gemini"},
-		"moonshot":    {"moonshot", "kimi"},
-		"minimax":     {"minimax", "abab"},
-		"aihubmix":    {"aihubmix"},
-		"siliconflow": {"siliconflow"},
-		"volcengine":  {"volcengine", "doubao"},
+func isProviderConfigured(name string, p *ProviderConfig) bool {
+	if p == nil {
+		return false
+	}
+
+	switch name {
+	case "ollama":
+		return p.GetEffectiveAPIBase() != "" || p.Model != ""
+	case "custom", "vllm":
+		return p.GetEffectiveAPIBase() != "" || p.APIKey != ""
+	default:
+		return p.APIKey != ""
 	}
 }
 
-// providerOrder 匹配优先级顺序
+// providerOrder fallback 匹配优先级顺序（当 model 无前缀时，按此顺序查找第一个已配置的 provider）。
+// 注意：此顺序与 providers/registry.go:Providers 的关键词匹配顺序不同，两者用途不同。
 func providerOrder() []string {
 	return []string{
 		"anthropic", "openai", "openrouter", "deepseek", "groq",
-		"zhipu", "dashscope", "gemini", "moonshot", "minimax",
+		"zhipu", "dashscope", "gemini", "ollama", "moonshot", "minimax",
 		"aihubmix", "siliconflow", "volcengine", "vllm", "custom",
+		"openai_codex", "github_copilot",
 	}
 }
 
 // defaultAPIBase 返回 Provider 的默认 API Base
 func defaultAPIBase(name string) string {
 	bases := map[string]string{
-		"openrouter":  "https://openrouter.ai/api/v1",
-		"deepseek":    "https://api.deepseek.com/v1",
-		"groq":        "https://api.groq.com/openai/v1",
-		"zhipu":       "https://open.bigmodel.cn/api/paas/v4",
-		"dashscope":   "https://dashscope.aliyuncs.com/compatible-mode/v1",
-		"moonshot":    "https://api.moonshot.cn/v1",
-		"minimax":     "https://api.minimax.chat/v1",
-		"aihubmix":    "https://aihubmix.com/v1",
-		"siliconflow": "https://api.siliconflow.cn/v1",
-		"volcengine":  "https://ark.cn-beijing.volces.com/api/v3",
+		"openrouter":   "https://openrouter.ai/api/v1",
+		"deepseek":     "https://api.deepseek.com/v1",
+		"groq":         "https://api.groq.com/openai/v1",
+		"zhipu":        "https://open.bigmodel.cn/api/paas/v4",
+		"dashscope":    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		"ollama":       "http://127.0.0.1:11434",
+		"moonshot":     "https://api.moonshot.cn/v1",
+		"minimax":      "https://api.minimax.chat/v1",
+		"aihubmix":     "https://aihubmix.com/v1",
+		"siliconflow":  "https://api.siliconflow.cn/v1",
+		"volcengine":   "https://ark.cn-beijing.volces.com/api/v3",
+		"openai_codex": "https://chatgpt.com/backend-api",
 	}
 	return bases[name]
 }

@@ -508,6 +508,7 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 		zap.Int("attached_media_count", len(msg.Media)),
 		zap.Bool("multimodal", false),
 		zap.Int("user_content_length", len(userContentStr)),
+		zap.Any("message_snapshot", buildModelInputSnapshot(einoMsgs)),
 	)
 
 	// 构建 progress 回调（replyTo 已在上方定义）
@@ -560,6 +561,13 @@ func (l *AgentLoop) processMessage(ctx context.Context, msg *bus.InboundMessage)
 	)
 	finalContent, finishReason, err := l.runWithADK(ctx, einoMsgs, onProgress)
 	if err != nil {
+		l.logger.Error("消息链路: 模型调用失败，输出输入快照用于排查",
+			zap.String("trace_id", traceID),
+			zap.String("session_key", sessionKey),
+			zap.Int("eino_messages", len(einoMsgs)),
+			zap.Any("message_snapshot", buildModelInputSnapshot(einoMsgs)),
+			zap.Error(err),
+		)
 		result = "agent_error"
 		return nil, err
 	}
@@ -1188,6 +1196,42 @@ func previewText(text string, limit int) string {
 		return text
 	}
 	return string(runes[:limit]) + "..."
+}
+
+func buildModelInputSnapshot(messages []*schema.Message) []map[string]any {
+	snapshot := make([]map[string]any, 0, len(messages))
+	for i, msg := range messages {
+		if msg == nil {
+			snapshot = append(snapshot, map[string]any{
+				"index": i,
+				"nil":   true,
+			})
+			continue
+		}
+
+		item := map[string]any{
+			"index":                 i,
+			"role":                  msg.Role,
+			"content_length":        len(msg.Content),
+			"content_preview":       previewText(msg.Content, 120),
+			"multi_content_count":   len(msg.MultiContent),
+			"tool_calls_count":      len(msg.ToolCalls),
+			"tool_call_id":          msg.ToolCallID,
+			"tool_name":             msg.ToolName,
+			"reasoning_content_len": len(msg.ReasoningContent),
+		}
+
+		if len(msg.MultiContent) > 0 {
+			partTypes := make([]string, 0, len(msg.MultiContent))
+			for _, part := range msg.MultiContent {
+				partTypes = append(partTypes, string(part.Type))
+			}
+			item["multi_content_types"] = partTypes
+		}
+
+		snapshot = append(snapshot, item)
+	}
+	return snapshot
 }
 
 // setToolContext 更新工具上下文

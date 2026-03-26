@@ -1,5 +1,7 @@
 package providers
 
+import "strings"
+
 // ProviderSpec Provider 元数据 (对标 pp-claw/providers/registry.py:ProviderSpec)
 type ProviderSpec struct {
 	Name                string
@@ -131,6 +133,15 @@ var Providers = []ProviderSpec{
 		SkipPrefixes:  []string{"gemini/"},
 	},
 	{
+		Name:           "ollama",
+		Keywords:       []string{"ollama"},
+		DisplayName:    "Ollama",
+		LiteLLMPrefix:  "ollama",
+		SkipPrefixes:   []string{"ollama/"},
+		IsLocal:        true,
+		DefaultAPIBase: "http://127.0.0.1:11434",
+	},
+	{
 		Name:          "zhipu",
 		Keywords:      []string{"zhipu", "glm", "zai"},
 		EnvKey:        "ZAI_API_KEY",
@@ -155,7 +166,7 @@ var Providers = []ProviderSpec{
 		LiteLLMPrefix:  "moonshot",
 		SkipPrefixes:   []string{"moonshot/", "openrouter/"},
 		EnvExtras:      [][2]string{{"MOONSHOT_API_BASE", "{api_base}"}},
-		DefaultAPIBase: "https://api.moonshot.ai/v1",
+		DefaultAPIBase: "https://api.moonshot.cn/v1",
 	},
 	{
 		Name:           "minimax",
@@ -164,7 +175,7 @@ var Providers = []ProviderSpec{
 		DisplayName:    "MiniMax",
 		LiteLLMPrefix:  "minimax",
 		SkipPrefixes:   []string{"minimax/", "openrouter/"},
-		DefaultAPIBase: "https://api.minimax.io/v1",
+		DefaultAPIBase: "https://api.minimax.chat/v1",
 	},
 
 	// === Local ===
@@ -190,13 +201,13 @@ var Providers = []ProviderSpec{
 
 // FindByModel 根据模型名匹配标准 Provider (对标 registry.py:find_by_model)
 func FindByModel(model string) *ProviderSpec {
-	modelLower := toLower(model)
-	modelNorm := replaceAll(modelLower, "-", "_")
+	modelLower := strings.ToLower(model)
+	modelNorm := strings.ReplaceAll(modelLower, "-", "_")
 	modelPrefix := ""
-	if idx := indexOf(modelLower, "/"); idx >= 0 {
+	if idx := strings.Index(modelLower, "/"); idx >= 0 {
 		modelPrefix = modelLower[:idx]
 	}
-	normPrefix := replaceAll(modelPrefix, "-", "_")
+	normPrefix := strings.ReplaceAll(modelPrefix, "-", "_")
 
 	// 排除 gateway/local
 	var stdSpecs []*ProviderSpec
@@ -218,8 +229,8 @@ func FindByModel(model string) *ProviderSpec {
 	// 关键词匹配
 	for _, spec := range stdSpecs {
 		for _, kw := range spec.Keywords {
-			kwNorm := replaceAll(kw, "-", "_")
-			if contains(modelLower, kw) || contains(modelNorm, kwNorm) {
+			kwNorm := strings.ReplaceAll(kw, "-", "_")
+			if strings.Contains(modelLower, kw) || strings.Contains(modelNorm, kwNorm) {
 				return spec
 			}
 		}
@@ -240,10 +251,10 @@ func FindGateway(providerName, apiKey, apiBase string) *ProviderSpec {
 	// 2. 按 api_key prefix / api_base keyword 检测
 	for i := range Providers {
 		spec := &Providers[i]
-		if spec.DetectByKeyPrefix != "" && apiKey != "" && hasPrefix(apiKey, spec.DetectByKeyPrefix) {
+		if spec.DetectByKeyPrefix != "" && apiKey != "" && strings.HasPrefix(apiKey, spec.DetectByKeyPrefix) {
 			return spec
 		}
-		if spec.DetectByBaseKeyword != "" && apiBase != "" && contains(apiBase, spec.DetectByBaseKeyword) {
+		if spec.DetectByBaseKeyword != "" && apiBase != "" && strings.Contains(apiBase, spec.DetectByBaseKeyword) {
 			return spec
 		}
 	}
@@ -260,49 +271,3 @@ func FindByName(name string) *ProviderSpec {
 	return nil
 }
 
-// string helpers (避免导入 strings 包冲突)
-func toLower(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if c >= 'A' && c <= 'Z' {
-			b[i] = c + 32
-		}
-	}
-	return string(b)
-}
-
-func replaceAll(s, old, new string) string {
-	result := ""
-	for i := 0; i < len(s); {
-		if i+len(old) <= len(s) && s[i:i+len(old)] == old {
-			result += new
-			i += len(old)
-		} else {
-			result += string(s[i])
-			i++
-		}
-	}
-	return result
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
-
-func indexOf(s string, sep string) int {
-	for i := 0; i+len(sep) <= len(s); i++ {
-		if s[i:i+len(sep)] == sep {
-			return i
-		}
-	}
-	return -1
-}
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}

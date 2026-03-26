@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -21,6 +22,8 @@ type AzureConfig struct {
 	APIBase      string
 	DefaultModel string
 	APIVersion   string
+	MaxTokens    int     // from agents.defaults.max_tokens
+	Temperature  float64 // from agents.defaults.temperature
 }
 
 // AzureChatModel implements einomodel.ToolCallingChatModel for Azure OpenAI.
@@ -59,10 +62,11 @@ func isReasoningModel(m string) bool {
 
 // azureRequest represents the Azure OpenAI chat completions request.
 type azureRequest struct {
-	Messages           []azureMessage   `json:"messages"`
-	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
-	Temperature        *float32         `json:"temperature,omitempty"`
-	Tools              []azureTool      `json:"tools,omitempty"`
+	Messages            []azureMessage `json:"messages"`
+	MaxCompletionTokens int            `json:"max_completion_tokens,omitempty"`
+	Temperature         *float32       `json:"temperature,omitempty"`
+	Tools               []azureTool    `json:"tools,omitempty"`
+	Stream              bool           `json:"stream,omitempty"`
 }
 
 type azureMessage struct {
@@ -73,8 +77,8 @@ type azureMessage struct {
 }
 
 type azureTool struct {
-	Type     string             `json:"type"`
-	Function azureToolFunction  `json:"function"`
+	Type     string            `json:"type"`
+	Function azureToolFunction `json:"function"`
 }
 
 type azureToolFunction struct {
@@ -90,6 +94,7 @@ type azureToolCall struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
+	Index *int `json:"index,omitempty"`
 }
 
 // azureResponse represents the Azure OpenAI chat completions response.
@@ -108,13 +113,26 @@ type azureResponse struct {
 	} `json:"error"`
 }
 
-// Generate implements model.ToolCallingChatModel.
-func (m *AzureChatModel) Generate(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.Message, error) {
-	deployment := m.config.DefaultModel
-	url := fmt.Sprintf("%s/openai/deployments/%s/chat/completions?api-version=%s",
-		strings.TrimRight(m.config.APIBase, "/"), deployment, m.config.APIVersion)
+// azureStreamChunk represents one SSE chunk from Azure OpenAI streaming.
+type azureStreamChunk struct {
+	Choices []struct {
+		Delta struct {
+			Role      string          `json:"role"`
+			Content   string          `json:"content"`
+			ToolCalls []azureToolCall `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	} `json:"error"`
+}
 
-	// Convert messages
+// buildAzureRequest builds the common request payload.
+func (m *AzureChatModel) buildAzureRequest(messages []*schema.Message, stream bool) azureRequest {
+	deployment := m.config.DefaultModel
+
 	azureMsgs := make([]azureMessage, 0, len(messages))
 	for _, msg := range messages {
 		am := azureMessage{Content: msg.Content}
@@ -149,18 +167,21 @@ func (m *AzureChatModel) Generate(ctx context.Context, messages []*schema.Messag
 		azureMsgs = append(azureMsgs, am)
 	}
 
+	maxTokens := m.config.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 8192
+	}
 	req := azureRequest{
 		Messages:            azureMsgs,
-		MaxCompletionTokens: 8192,
+		MaxCompletionTokens: maxTokens,
+		Stream:              stream,
 	}
 
-	// Temperature — skip for reasoning models
-	if !isReasoningModel(deployment) {
-		temp := float32(0.1)
+	if !isReasoningModel(deployment) && m.config.Temperature > 0 {
+		temp := float32(m.config.Temperature)
 		req.Temperature = &temp
 	}
 
-	// Tools
 	if len(m.tools) > 0 {
 		for _, t := range m.tools {
 			at := azureTool{
@@ -179,7 +200,16 @@ func (m *AzureChatModel) Generate(ctx context.Context, messages []*schema.Messag
 		}
 	}
 
-	body, err := json.Marshal(req)
+	return req
+}
+
+// doHTTPRequest sends the request to Azure and returns the http.Response.
+func (m *AzureChatModel) doHTTPRequest(ctx context.Context, reqBody azureRequest) (*http.Response, error) {
+	deployment := m.config.DefaultModel
+	url := fmt.Sprintf("%s/openai/deployments/%s/chat/completions?api-version=%s",
+		strings.TrimRight(m.config.APIBase, "/"), deployment, m.config.APIVersion)
+
+	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("azure marshal: %w", err)
 	}
@@ -195,15 +225,28 @@ func (m *AzureChatModel) Generate(ctx context.Context, messages []*schema.Messag
 	if err != nil {
 		return nil, fmt.Errorf("azure http: %w", err)
 	}
+
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("azure API error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return resp, nil
+}
+
+// Generate implements model.ToolCallingChatModel.
+func (m *AzureChatModel) Generate(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	reqBody := m.buildAzureRequest(messages, false)
+	resp, err := m.doHTTPRequest(ctx, reqBody)
+	if err != nil {
+		return nil, err
+	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("azure read: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("azure API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	var azureResp azureResponse
@@ -225,7 +268,6 @@ func (m *AzureChatModel) Generate(ctx context.Context, messages []*schema.Messag
 		Content: choice.Message.Content,
 	}
 
-	// Convert tool calls
 	for _, tc := range choice.Message.ToolCalls {
 		result.ToolCalls = append(result.ToolCalls, schema.ToolCall{
 			ID: tc.ID,
@@ -239,18 +281,100 @@ func (m *AzureChatModel) Generate(ctx context.Context, messages []*schema.Messag
 	return result, nil
 }
 
-// Stream implements model.ToolCallingChatModel (stub — returns full response).
+// Stream implements model.ToolCallingChatModel with real SSE streaming.
 func (m *AzureChatModel) Stream(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
-	msg, err := m.Generate(ctx, messages, opts...)
+	reqBody := m.buildAzureRequest(messages, true)
+	resp, err := m.doHTTPRequest(ctx, reqBody)
 	if err != nil {
 		return nil, err
 	}
 
 	r, w := schema.Pipe[*schema.Message](1)
 	go func() {
+		defer resp.Body.Close()
 		defer w.Close()
-		w.Send(msg, nil)
+
+		scanner := bufio.NewScanner(resp.Body)
+		// Accumulate tool calls across chunks by index
+		toolCallMap := map[int]*schema.ToolCall{}
+
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
+				// Send final message with accumulated tool calls
+				if len(toolCallMap) > 0 {
+					msg := &schema.Message{Role: schema.Assistant}
+					for i := 0; i < len(toolCallMap); i++ {
+						if tc, ok := toolCallMap[i]; ok {
+							msg.ToolCalls = append(msg.ToolCalls, *tc)
+						}
+					}
+					w.Send(msg, nil)
+				}
+				break
+			}
+
+			var chunk azureStreamChunk
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue
+			}
+
+			if chunk.Error != nil {
+				w.Send(nil, fmt.Errorf("azure stream error: %s", chunk.Error.Message))
+				return
+			}
+
+			if len(chunk.Choices) == 0 {
+				continue
+			}
+
+			delta := chunk.Choices[0].Delta
+
+			// Accumulate tool calls
+			for _, tc := range delta.ToolCalls {
+				idx := 0
+				if tc.Index != nil {
+					idx = *tc.Index
+				}
+				existing, ok := toolCallMap[idx]
+				if !ok {
+					existing = &schema.ToolCall{
+						ID: tc.ID,
+						Function: schema.FunctionCall{
+							Name: tc.Function.Name,
+						},
+					}
+					toolCallMap[idx] = existing
+				}
+				if tc.ID != "" {
+					existing.ID = tc.ID
+				}
+				if tc.Function.Name != "" {
+					existing.Function.Name = tc.Function.Name
+				}
+				existing.Function.Arguments += tc.Function.Arguments
+			}
+
+			// Send text content chunks immediately for streaming display
+			if delta.Content != "" {
+				msg := &schema.Message{
+					Role:    schema.Assistant,
+					Content: delta.Content,
+				}
+				w.Send(msg, nil)
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			w.Send(nil, fmt.Errorf("azure stream scan: %w", err))
+		}
 	}()
+
 	return r, nil
 }
 

@@ -82,6 +82,7 @@ type ProvidersConfig struct {
 	DashScope     ProviderConfig      `yaml:"dashscope"`
 	VLLM          ProviderConfig      `yaml:"vllm"`
 	Gemini        ProviderConfig      `yaml:"gemini"`
+	Ollama        ProviderConfig      `yaml:"ollama"`
 	Moonshot      ProviderConfig      `yaml:"moonshot"`
 	MiniMax       ProviderConfig      `yaml:"minimax"`
 	AiHubMix      ProviderConfig      `yaml:"aihubmix"`
@@ -395,20 +396,23 @@ func (c *Config) GetProviderByName(name string) *ProviderConfig {
 // providerMap 返回 name → *ProviderConfig 映射（schema 级别，供其他方法调用）
 func (c *Config) providerMap() map[string]*ProviderConfig {
 	return map[string]*ProviderConfig{
-		"custom":      &c.Providers.Custom,
-		"anthropic":   &c.Providers.Anthropic,
-		"openai":      &c.Providers.OpenAI,
-		"openrouter":  &c.Providers.OpenRouter,
-		"deepseek":    &c.Providers.DeepSeek,
-		"groq":        &c.Providers.Groq,
-		"zhipu":       &c.Providers.Zhipu,
-		"dashscope":   &c.Providers.DashScope,
-		"vllm":        &c.Providers.VLLM,
-		"gemini":      &c.Providers.Gemini,
-		"moonshot":    &c.Providers.Moonshot,
-		"minimax":     &c.Providers.MiniMax,
-		"aihubmix":    &c.Providers.AiHubMix,
-		"siliconflow": &c.Providers.SiliconFlow,
-		"volcengine":  &c.Providers.VolcEngine,
+		"custom":         &c.Providers.Custom,
+		"anthropic":      &c.Providers.Anthropic,
+		"openai":         &c.Providers.OpenAI,
+		"openrouter":     &c.Providers.OpenRouter,
+		"deepseek":       &c.Providers.DeepSeek,
+		"groq":           &c.Providers.Groq,
+		"zhipu":          &c.Providers.Zhipu,
+		"dashscope":      &c.Providers.DashScope,
+		"vllm":           &c.Providers.VLLM,
+		"gemini":         &c.Providers.Gemini,
+		"ollama":         &c.Providers.Ollama,
+		"moonshot":       &c.Providers.Moonshot,
+		"minimax":        &c.Providers.MiniMax,
+		"aihubmix":       &c.Providers.AiHubMix,
+		"siliconflow":    &c.Providers.SiliconFlow,
+		"volcengine":     &c.Providers.VolcEngine,
+		"openai_codex":   &c.Providers.OpenAICodex,
+		"github_copilot": &c.Providers.GithubCopilot,
 	}
 }

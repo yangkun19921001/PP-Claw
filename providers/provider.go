@@ -4,24 +4,27 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
+	einoark "github.com/cloudwego/eino-ext/components/model/ark"
+	einoclaude "github.com/cloudwego/eino-ext/components/model/claude"
+	einodeepseek "github.com/cloudwego/eino-ext/components/model/deepseek"
+	einogemini "github.com/cloudwego/eino-ext/components/model/gemini"
+	einoollama "github.com/cloudwego/eino-ext/components/model/ollama"
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
+	einoqwen "github.com/cloudwego/eino-ext/components/model/qwen"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/yangkun19921001/PP-Claw/config"
 	"go.uber.org/zap"
+	"google.golang.org/genai"
 )
 
-// NewChatModel 创建 Eino ChatModel (对标 pp-claw/providers/litellm_provider.py)
-// 使用 OpenAI 兼容层，支持所有 OpenAI 兼容 API
-//
-// 支持的配置方式:
-//  1. 内置 Provider: model="deepseek/deepseek-chat" + providers.deepseek.api_key
-//  2. 自定义 Provider: model="custom/my-model" 或 model="my-model" + providers.custom.api_key + providers.custom.api_base
-//  3. 任意 OpenAI 兼容 API: 配置 providers.custom 即可
+// NewChatModel 创建 Eino ChatModel。
+// 优先使用 eino-ext 已提供的原生 provider 组件；仅在框架未提供原生实现时，才回退到 OpenAI-compatible 适配层。
 func NewChatModel(logger *zap.Logger, cfg *config.Config) (model.ToolCallingChatModel, error) {
 	modelName := cfg.Agents.Defaults.Model
 
-	// Check for Azure OpenAI provider
 	azureCfg := cfg.Providers.AzureOpenAI
 	if azureCfg.APIKey != "" && azureCfg.APIBase != "" {
 		azModel := azureCfg.DefaultModel
@@ -37,38 +40,201 @@ func NewChatModel(logger *zap.Logger, cfg *config.Config) (model.ToolCallingChat
 			APIBase:      azureCfg.APIBase,
 			DefaultModel: azModel,
 			APIVersion:   azureCfg.APIVersion,
+			MaxTokens:    cfg.Agents.Defaults.MaxTokens,
+			Temperature:  cfg.Agents.Defaults.Temperature,
 		}, logger), nil
 	}
 
-	provider := cfg.GetProvider(modelName)
 	providerName := cfg.GetProviderName(modelName)
-
-	if provider == nil || provider.APIKey == "" {
-		return nil, fmt.Errorf("no API key configured for model %q\n\nPlease configure in ~/.pp-claw/pp-claw.yaml:\n\n  providers:\n    custom:\n      api_key: \"your-api-key\"\n      api_base: \"https://your-api-base/v1\"\n\n  agents:\n    defaults:\n      model: \"your-model-name\"", modelName)
+	provider := cfg.GetProvider(modelName)
+	if providerName == "" {
+		return nil, fmt.Errorf("无法为模型 %q 匹配 provider，请检查 providers 配置或 model 前缀", modelName)
+	}
+	if provider == nil {
+		return nil, fmt.Errorf("模型 %q 命中了 provider %q，但该 provider 当前未完成配置", modelName, providerName)
 	}
 
-	// 获取 API Base URL
 	apiBase := cfg.GetAPIBase(modelName)
-	if apiBase == "" {
-		apiBase = "https://api.openai.com/v1"
+	actualModel := resolveActualModel(modelName, providerName, provider)
+	headers := buildProviderHeaders(providerName, provider)
+
+	logger.Info("Provider 路由已解析",
+		zap.String("provider", providerName),
+		zap.String("requested_model", modelName),
+		zap.String("actual_model", actualModel),
+		zap.String("api_base", apiBase),
+	)
+
+	var (
+		chatModel model.ToolCallingChatModel
+		err       error
+	)
+
+	switch providerName {
+	case "anthropic":
+		chatModel, err = newClaudeChatModel(actualModel, apiBase, provider, cfg, headers)
+	case "gemini":
+		chatModel, err = newGeminiChatModel(actualModel, apiBase, provider, cfg, headers)
+	case "volcengine":
+		chatModel, err = newArkChatModel(actualModel, apiBase, provider, cfg, headers)
+	case "deepseek":
+		chatModel, err = newDeepSeekChatModel(actualModel, apiBase, provider, cfg, headers)
+	case "dashscope":
+		chatModel, err = newQwenChatModel(actualModel, apiBase, provider, cfg, headers)
+	case "ollama":
+		chatModel, err = newOllamaChatModel(actualModel, apiBase, provider, cfg, headers)
+	default:
+		chatModel, err = newOpenAICompatibleChatModel(actualModel, apiBase, providerName, provider, cfg, headers)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("创建 provider=%s model=%s 失败: %w", providerName, actualModel, err)
 	}
 
-	// 直接使用用户填写的 model 名，不做前缀剥离
-	actualModel := modelName
+	logger.Info("Provider 初始化完成",
+		zap.String("provider", providerName),
+		zap.String("model", actualModel),
+		zap.String("api_base", apiBase),
+	)
 
-	// 如果 Provider 配置中指定了 model，使用 Provider 级别的 model 覆盖
-	if provider.Model != "" {
-		actualModel = provider.Model
-	}
+	return chatModel, nil
+}
 
-	// 构建 ChatModel 配置
+func newOpenAICompatibleChatModel(actualModel, apiBase, providerName string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
 	chatModelCfg := &einoopenai.ChatModelConfig{
 		APIKey:  provider.APIKey,
 		Model:   actualModel,
 		BaseURL: apiBase,
 	}
+	applyCommonParamsToOpenAI(chatModelCfg, cfg)
+	chatModelCfg.HTTPClient = buildHTTPClient(headers)
+	return einoopenai.NewChatModel(context.Background(), chatModelCfg)
+}
 
-	// 设置可选参数
+func newClaudeChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+	chatCfg := &einoclaude.Config{
+		APIKey:     provider.APIKey,
+		Model:      actualModel,
+		MaxTokens:  max(cfg.Agents.Defaults.MaxTokens, 1),
+		HTTPClient: buildHTTPClient(headers),
+	}
+	if apiBase != "" {
+		chatCfg.BaseURL = &apiBase
+	}
+	if cfg.Agents.Defaults.Temperature > 0 {
+		temp := float32(cfg.Agents.Defaults.Temperature)
+		chatCfg.Temperature = &temp
+	}
+	return einoclaude.NewChatModel(context.Background(), chatCfg)
+}
+
+func newGeminiChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+	clientCfg := &genai.ClientConfig{
+		APIKey:  provider.APIKey,
+		Backend: genai.BackendGeminiAPI,
+	}
+	if apiBase != "" || len(headers) > 0 {
+		httpHeaders := http.Header{}
+		for k, v := range headers {
+			httpHeaders.Set(k, v)
+		}
+		clientCfg.HTTPOptions = genai.HTTPOptions{
+			BaseURL: apiBase,
+			Headers: httpHeaders,
+		}
+	}
+	client, err := genai.NewClient(context.Background(), clientCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	chatCfg := &einogemini.Config{
+		Client: client,
+		Model:  actualModel,
+	}
+	if cfg.Agents.Defaults.MaxTokens > 0 {
+		maxTokens := cfg.Agents.Defaults.MaxTokens
+		chatCfg.MaxTokens = &maxTokens
+	}
+	if cfg.Agents.Defaults.Temperature > 0 {
+		temp := float32(cfg.Agents.Defaults.Temperature)
+		chatCfg.Temperature = &temp
+	}
+	return einogemini.NewChatModel(context.Background(), chatCfg)
+}
+
+func newArkChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+	chatCfg := &einoark.ChatModelConfig{
+		APIKey:       provider.APIKey,
+		BaseURL:      apiBase,
+		Model:        actualModel,
+		HTTPClient:   buildHTTPClient(headers),
+		CustomHeader: cloneStringMap(headers),
+	}
+	if cfg.Agents.Defaults.MaxTokens > 0 {
+		maxTokens := cfg.Agents.Defaults.MaxTokens
+		chatCfg.MaxTokens = &maxTokens
+	}
+	if cfg.Agents.Defaults.Temperature > 0 {
+		temp := float32(cfg.Agents.Defaults.Temperature)
+		chatCfg.Temperature = &temp
+	}
+	return einoark.NewChatModel(context.Background(), chatCfg)
+}
+
+func newDeepSeekChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+	chatCfg := &einodeepseek.ChatModelConfig{
+		APIKey:     provider.APIKey,
+		BaseURL:    apiBase,
+		Model:      actualModel,
+		HTTPClient: buildHTTPClient(headers),
+	}
+	if cfg.Agents.Defaults.MaxTokens > 0 {
+		chatCfg.MaxTokens = cfg.Agents.Defaults.MaxTokens
+	}
+	if cfg.Agents.Defaults.Temperature > 0 {
+		chatCfg.Temperature = float32(cfg.Agents.Defaults.Temperature)
+	}
+	return einodeepseek.NewChatModel(context.Background(), chatCfg)
+}
+
+func newQwenChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+	chatCfg := &einoqwen.ChatModelConfig{
+		APIKey:     provider.APIKey,
+		BaseURL:    apiBase,
+		Model:      actualModel,
+		HTTPClient: buildHTTPClient(headers),
+	}
+	if cfg.Agents.Defaults.MaxTokens > 0 {
+		maxTokens := cfg.Agents.Defaults.MaxTokens
+		chatCfg.MaxTokens = &maxTokens
+	}
+	if cfg.Agents.Defaults.Temperature > 0 {
+		temp := float32(cfg.Agents.Defaults.Temperature)
+		chatCfg.Temperature = &temp
+	}
+	return einoqwen.NewChatModel(context.Background(), chatCfg)
+}
+
+func newOllamaChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+	chatCfg := &einoollama.ChatModelConfig{
+		BaseURL:    apiBase,
+		Model:      actualModel,
+		HTTPClient: buildHTTPClient(headers),
+		Timeout:    5 * time.Minute,
+	}
+	// Ollama 通过 Options 传递 Temperature 和 NumPredict(MaxTokens)
+	opts := &einoollama.Options{}
+	if cfg.Agents.Defaults.Temperature > 0 {
+		opts.Temperature = float32(cfg.Agents.Defaults.Temperature)
+	}
+	if cfg.Agents.Defaults.MaxTokens > 0 {
+		opts.NumPredict = cfg.Agents.Defaults.MaxTokens
+	}
+	chatCfg.Options = opts
+	return einoollama.NewChatModel(context.Background(), chatCfg)
+}
+
+func applyCommonParamsToOpenAI(chatModelCfg *einoopenai.ChatModelConfig, cfg *config.Config) {
 	if cfg.Agents.Defaults.MaxTokens > 0 {
 		maxTokens := cfg.Agents.Defaults.MaxTokens
 		chatModelCfg.MaxTokens = &maxTokens
@@ -77,61 +243,81 @@ func NewChatModel(logger *zap.Logger, cfg *config.Config) (model.ToolCallingChat
 		temp := float32(cfg.Agents.Defaults.Temperature)
 		chatModelCfg.Temperature = &temp
 	}
-
-	// 应用 Prompt Caching 和 Extra Headers
-	applyPromptCaching(providerName, provider, chatModelCfg)
-
-	chatModel, err := einoopenai.NewChatModel(context.Background(), chatModelCfg)
-	if err != nil {
-		return nil, fmt.Errorf("创建 ChatModel 失败: %w", err)
-	}
-
-	logger.Info("Provider 初始化完成",
-		zap.String("model", actualModel),
-		zap.String("api_base", apiBase),
-		zap.String("provider", providerName),
-	)
-
-	return chatModel, nil
 }
 
-// applyPromptCaching 应用 Prompt Caching 支持
-// 通过自定义 HTTPClient 注入 extra headers (包括 anthropic-beta header)
-func applyPromptCaching(providerName string, provider *config.ProviderConfig, chatModelCfg *einoopenai.ChatModelConfig) {
-	headers := make(map[string]string)
-
-	// 从 Provider 配置传递 extra_headers
-	for k, v := range provider.ExtraHeaders {
-		headers[k] = v
+func resolveActualModel(modelName, providerName string, provider *config.ProviderConfig) string {
+	if provider != nil && provider.Model != "" {
+		return provider.Model
 	}
 
-	// 对 Anthropic/OpenRouter 自动注入 prompt caching beta header
+	candidates := []string{providerName + "/"}
+	if spec := FindByName(providerName); spec != nil {
+		candidates = append(candidates, spec.SkipPrefixes...)
+	}
+
+	modelLower := strings.ToLower(modelName)
+	for _, prefix := range candidates {
+		if prefix == "" {
+			continue
+		}
+		if strings.HasPrefix(modelLower, strings.ToLower(prefix)) {
+			return modelName[len(prefix):]
+		}
+	}
+	return modelName
+}
+
+func buildProviderHeaders(providerName string, provider *config.ProviderConfig) map[string]string {
+	headers := cloneStringMap(provider.ExtraHeaders)
+
 	spec := FindByName(providerName)
-	if spec != nil && spec.SupportsPromptCache {
-		if providerName == "anthropic" {
-			headers["anthropic-beta"] = "prompt-caching-2024-07-31"
-		}
+	if spec != nil && spec.SupportsPromptCache && providerName == "anthropic" {
+		headers["anthropic-beta"] = "prompt-caching-2024-07-31"
 	}
+	return headers
+}
 
-	if len(headers) > 0 {
-		chatModelCfg.HTTPClient = &http.Client{
-			Transport: &headerRoundTripper{
-				base:    http.DefaultTransport,
-				headers: headers,
-			},
-		}
+func buildHTTPClient(headers map[string]string) *http.Client {
+	if len(headers) == 0 {
+		return nil
+	}
+	return &http.Client{
+		Transport: &headerRoundTripper{
+			base:    http.DefaultTransport,
+			headers: headers,
+		},
 	}
 }
 
-// headerRoundTripper 自定义 RoundTripper，用于注入 HTTP 请求头
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// headerRoundTripper 自定义 RoundTripper，用于注入 HTTP 请求头。
 type headerRoundTripper struct {
 	base    http.RoundTripper
 	headers map[string]string
 }
 
 func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Clone request to avoid mutating the original (RoundTrip contract)
+	cloned := req.Clone(req.Context())
 	for k, v := range t.headers {
-		req.Header.Set(k, v)
+		cloned.Header.Set(k, v)
 	}
-	return t.base.RoundTrip(req)
+	return t.base.RoundTrip(cloned)
 }

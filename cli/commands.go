@@ -401,6 +401,7 @@ func runOnboard() error {
 		chosenName = "custom"
 	}
 	providerCfg.APIKey = apiKey
+	providerCfg.Model = model
 	if baseURL != "" {
 		providerCfg.BaseURL = baseURL
 	}

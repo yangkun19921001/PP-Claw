@@ -165,6 +165,30 @@ func (a *einoToolAdapter) Info(_ context.Context) (*schema.ToolInfo, error) {
 						pi.Type = schema.Boolean
 					case "array":
 						pi.Type = schema.Array
+						// 解析 items 以满足 LLM 要求 array 必须有 items 的约束
+						if items, ok := propMap["items"].(map[string]any); ok {
+							elemInfo := &schema.ParameterInfo{}
+							if elemType, ok := items["type"].(string); ok {
+								switch elemType {
+								case "string":
+									elemInfo.Type = schema.String
+								case "integer":
+									elemInfo.Type = schema.Integer
+								case "number":
+									elemInfo.Type = schema.Number
+								case "boolean":
+									elemInfo.Type = schema.Boolean
+								default:
+									elemInfo.Type = schema.String
+								}
+							} else {
+								elemInfo.Type = schema.String
+							}
+							pi.ElemInfo = elemInfo
+						} else {
+							// 默认 items 为 string
+							pi.ElemInfo = &schema.ParameterInfo{Type: schema.String}
+						}
 					default:
 						pi.Type = schema.String
 					}

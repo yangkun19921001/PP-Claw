@@ -48,7 +48,7 @@
 ### 环境要求
 
 - Go 1.21+
-- 至少一个 LLM Provider 的 API Key
+- 至少一个 LLM Provider 的 API Key(建议 claude 目前只试了这个)
 
 ### 编译安装
 
