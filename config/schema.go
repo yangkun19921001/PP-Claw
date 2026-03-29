@@ -13,7 +13,34 @@ type Config struct {
 
 // AgentsConfig Agent 配置
 type AgentsConfig struct {
-	Defaults AgentDefaults `yaml:"defaults"`
+	Defaults AgentDefaults  `yaml:"defaults"`
+	List     []AgentEntry   `yaml:"list,omitempty"`
+	Bindings []BindingEntry `yaml:"bindings,omitempty"`
+}
+
+// AgentEntry 定义一个命名 Agent（声明式配置，不对应运行时实例）
+type AgentEntry struct {
+	ID                  string  `yaml:"id"`
+	Name                string  `yaml:"name,omitempty"`
+	Default             bool    `yaml:"default,omitempty"`
+	Model               string  `yaml:"model,omitempty"`
+	Workspace           string  `yaml:"workspace,omitempty"`
+	MaxTokens           int     `yaml:"max_tokens,omitempty"`
+	Temperature         float64 `yaml:"temperature,omitempty"`
+	MaxToolIterations   int     `yaml:"max_tool_iterations,omitempty"`
+	MemoryWindow        int     `yaml:"memory_window,omitempty"`
+	ContextWindowTokens int     `yaml:"context_window_tokens,omitempty"`
+}
+
+// BindingEntry 路由规则：将消息匹配到目标 Agent
+// 评估顺序自上而下，第一个匹配的胜出
+type BindingEntry struct {
+	AgentID   string   `yaml:"agent_id"`
+	Channel   string   `yaml:"channel,omitempty"`
+	AccountID string   `yaml:"account_id,omitempty"`
+	ChatIDs   []string `yaml:"chat_ids,omitempty"`
+	SenderIDs []string `yaml:"sender_ids,omitempty"`
+	Default   bool     `yaml:"default,omitempty"`
 }
 
 // AgentDefaults 默认 Agent 配置
@@ -140,23 +167,43 @@ type WebToolsConfig struct {
 	Search WebSearchConfig `yaml:"search"`
 }
 
-// ============ 渠道子配置 (与 Python schema.py 完全对齐) ============
+// ============ 渠道子配置 ============
+// 每个渠道拆分为 AccountConfig（账号级凭证/行为）+ Config（顶层开关 + 多账号支持）
+// 顶层字段通过 yaml:",inline" 嵌入，作为默认账号配置；accounts map 中的条目会 shallow merge 覆盖
 
-type TelegramConfig struct {
-	Enabled        bool     `yaml:"enabled"`
+// --- Telegram ---
+
+type TelegramAccountConfig struct {
 	Token          string   `yaml:"token"`
 	AllowFrom      []string `yaml:"allow_from"`
 	Proxy          string   `yaml:"proxy"`
 	ReplyToMessage bool     `yaml:"reply_to_message"`
 }
 
-type DiscordConfig struct {
-	Enabled    bool     `yaml:"enabled"`
+type TelegramConfig struct {
+	Enabled                bool                                  `yaml:"enabled"`
+	DefaultAccount         string                                `yaml:"default_account,omitempty"`
+	Accounts               map[string]TelegramAccountConfig      `yaml:"accounts,omitempty"`
+	TelegramAccountConfig  `yaml:",inline"`
+}
+
+// --- Discord ---
+
+type DiscordAccountConfig struct {
 	Token      string   `yaml:"token"`
 	AllowFrom  []string `yaml:"allow_from"`
 	GatewayURL string   `yaml:"gateway_url"`
 	Intents    int      `yaml:"intents"`
 }
+
+type DiscordConfig struct {
+	Enabled               bool                                 `yaml:"enabled"`
+	DefaultAccount        string                               `yaml:"default_account,omitempty"`
+	Accounts              map[string]DiscordAccountConfig      `yaml:"accounts,omitempty"`
+	DiscordAccountConfig  `yaml:",inline"`
+}
+
+// --- Slack ---
 
 // SlackDMConfig Slack DM 策略
 type SlackDMConfig struct {
@@ -165,8 +212,7 @@ type SlackDMConfig struct {
 	AllowFrom []string `yaml:"allow_from"`
 }
 
-type SlackConfig struct {
-	Enabled        bool          `yaml:"enabled"`
+type SlackAccountConfig struct {
 	Mode           string        `yaml:"mode"` // "socket"
 	WebhookPath    string        `yaml:"webhook_path"`
 	BotToken       string        `yaml:"bot_token"`
@@ -179,41 +225,73 @@ type SlackConfig struct {
 	AllowFrom      []string      `yaml:"allow_from"`
 }
 
-type WhatsAppConfig struct {
-	Enabled     bool     `yaml:"enabled"`
+type SlackConfig struct {
+	Enabled             bool                              `yaml:"enabled"`
+	DefaultAccount      string                            `yaml:"default_account,omitempty"`
+	Accounts            map[string]SlackAccountConfig     `yaml:"accounts,omitempty"`
+	SlackAccountConfig  `yaml:",inline"`
+}
+
+// --- WhatsApp ---
+
+type WhatsAppAccountConfig struct {
 	BridgeURL   string   `yaml:"bridge_url"`
 	BridgeToken string   `yaml:"bridge_token"`
 	AllowFrom   []string `yaml:"allow_from"`
 }
 
-type FeishuConfig struct {
-	Enabled             bool     `yaml:"enabled"`
+type WhatsAppConfig struct {
+	Enabled                bool                                  `yaml:"enabled"`
+	DefaultAccount         string                                `yaml:"default_account,omitempty"`
+	Accounts               map[string]WhatsAppAccountConfig      `yaml:"accounts,omitempty"`
+	WhatsAppAccountConfig  `yaml:",inline"`
+}
+
+// --- Feishu ---
+
+type FeishuAccountConfig struct {
 	AppID               string   `yaml:"app_id"`
 	AppSecret           string   `yaml:"app_secret"`
 	EncryptKey          string   `yaml:"encrypt_key"`
 	VerificationToken   string   `yaml:"verification_token"`
 	AllowFrom           []string `yaml:"allow_from"`
-	GroupPolicy         string   `yaml:"group_policy"`     // "open"/"mention", default "mention"
-	ReactEmoji          string   `yaml:"react_emoji"`      // default "THUMBSUP"
-	ReplyToMessage      bool     `yaml:"reply_to_message"` // reply to the original message
+	GroupPolicy         string   `yaml:"group_policy"`            // "open"/"mention", default "mention"
+	ReactEmoji          string   `yaml:"react_emoji"`             // default "THUMBSUP"
+	ReplyToMessage      bool     `yaml:"reply_to_message"`        // reply to the original message
 	WikiEnabled         bool     `yaml:"wiki_enabled"`
 	DocsEnabled         bool     `yaml:"docs_enabled"`
-	OAuthRedirectURL    string   `yaml:"oauth_redirect_url"`      // OAuth 回调地址，复用 gateway 端口，如 http://localhost:18790/feishu/oauth/callback
+	OAuthRedirectURL    string   `yaml:"oauth_redirect_url"`      // OAuth 回调地址
 	SearchMaxResults    int      `yaml:"search_max_results"`      // 搜索后自动读取的文档数量，默认 3
-	AilyAppID           string   `yaml:"aily_app_id"`             // 飞书智能伙伴 App ID (如 spring_xxx__c)
+	AilyAppID           string   `yaml:"aily_app_id"`             // 飞书智能伙伴 App ID
 	AilyDataAssetIDs    []string `yaml:"aily_data_asset_ids"`     // Aily 数据知识 ID 列表
 	AilyDataAssetTagIDs []string `yaml:"aily_data_asset_tag_ids"` // Aily 数据知识分类 ID 列表
 }
 
-type DingTalkConfig struct {
-	Enabled      bool     `yaml:"enabled"`
+type FeishuConfig struct {
+	Enabled              bool                                `yaml:"enabled"`
+	DefaultAccount       string                              `yaml:"default_account,omitempty"`
+	Accounts             map[string]FeishuAccountConfig      `yaml:"accounts,omitempty"`
+	FeishuAccountConfig  `yaml:",inline"`
+}
+
+// --- DingTalk ---
+
+type DingTalkAccountConfig struct {
 	ClientID     string   `yaml:"client_id"`
 	ClientSecret string   `yaml:"client_secret"`
 	AllowFrom    []string `yaml:"allow_from"`
 }
 
-type EmailConfig struct {
-	Enabled             bool     `yaml:"enabled"`
+type DingTalkConfig struct {
+	Enabled                bool                                  `yaml:"enabled"`
+	DefaultAccount         string                                `yaml:"default_account,omitempty"`
+	Accounts               map[string]DingTalkAccountConfig      `yaml:"accounts,omitempty"`
+	DingTalkAccountConfig  `yaml:",inline"`
+}
+
+// --- Email ---
+
+type EmailAccountConfig struct {
 	ConsentGranted      bool     `yaml:"consent_granted"`
 	IMAPHost            string   `yaml:"imap_host"`
 	IMAPPort            int      `yaml:"imap_port"`
@@ -232,31 +310,60 @@ type EmailConfig struct {
 	AllowFrom           []string `yaml:"allow_from"`
 }
 
-type QQConfig struct {
-	Enabled   bool     `yaml:"enabled"`
+type EmailConfig struct {
+	Enabled              bool                              `yaml:"enabled"`
+	DefaultAccount       string                            `yaml:"default_account,omitempty"`
+	Accounts             map[string]EmailAccountConfig     `yaml:"accounts,omitempty"`
+	EmailAccountConfig   `yaml:",inline"`
+}
+
+// --- QQ ---
+
+type QQAccountConfig struct {
 	AppID     string   `yaml:"app_id"`
 	Secret    string   `yaml:"secret"`
 	AllowFrom []string `yaml:"allow_from"`
 }
 
-// MochatConfig Mochat 渠道配置
-type MochatConfig struct {
-	Enabled bool   `yaml:"enabled"`
+type QQConfig struct {
+	Enabled          bool                           `yaml:"enabled"`
+	DefaultAccount   string                         `yaml:"default_account,omitempty"`
+	Accounts         map[string]QQAccountConfig     `yaml:"accounts,omitempty"`
+	QQAccountConfig  `yaml:",inline"`
+}
+
+// --- Mochat ---
+
+type MochatAccountConfig struct {
 	BaseURL string `yaml:"base_url"`
 }
 
-// WecomConfig 企业微信渠道配置
-type WecomConfig struct {
-	Enabled        bool     `yaml:"enabled"`
+type MochatConfig struct {
+	Enabled              bool                                `yaml:"enabled"`
+	DefaultAccount       string                              `yaml:"default_account,omitempty"`
+	Accounts             map[string]MochatAccountConfig      `yaml:"accounts,omitempty"`
+	MochatAccountConfig  `yaml:",inline"`
+}
+
+// --- Wecom ---
+
+type WecomAccountConfig struct {
 	BotID          string   `yaml:"bot_id"`
 	Secret         string   `yaml:"secret"`
 	WelcomeMessage string   `yaml:"welcome_message"`
 	AllowFrom      []string `yaml:"allow_from"`
 }
 
-// MatrixConfig Matrix 渠道配置
-type MatrixConfig struct {
-	Enabled        bool     `yaml:"enabled"`
+type WecomConfig struct {
+	Enabled              bool                               `yaml:"enabled"`
+	DefaultAccount       string                             `yaml:"default_account,omitempty"`
+	Accounts             map[string]WecomAccountConfig      `yaml:"accounts,omitempty"`
+	WecomAccountConfig   `yaml:",inline"`
+}
+
+// --- Matrix ---
+
+type MatrixAccountConfig struct {
 	Homeserver     string   `yaml:"homeserver"`
 	AccessToken    string   `yaml:"access_token"`
 	UserID         string   `yaml:"user_id"`
@@ -268,9 +375,19 @@ type MatrixConfig struct {
 	GroupAllowFrom []string `yaml:"group_allow_from"`
 }
 
-// WechatPersonalConfig 个人微信 ClawBot 风格渠道配置
+type MatrixConfig struct {
+	Enabled              bool                                `yaml:"enabled"`
+	DefaultAccount       string                              `yaml:"default_account,omitempty"`
+	Accounts             map[string]MatrixAccountConfig      `yaml:"accounts,omitempty"`
+	MatrixAccountConfig  `yaml:",inline"`
+}
+
+// --- WechatPersonal ---
+// 保持内部多账号模式不变，仅添加 DefaultAccount 字段
+
 type WechatPersonalConfig struct {
 	Enabled             bool                                   `yaml:"enabled"`
+	DefaultAccount      string                                 `yaml:"default_account,omitempty"`
 	StateDir            string                                 `yaml:"state_dir"`
 	BaseURL             string                                 `yaml:"base_url"`
 	CDNBaseURL          string                                 `yaml:"cdn_base_url"`
@@ -330,7 +447,9 @@ func DefaultConfig() *Config {
 			SendProgress:  true,
 			SendToolHints: true,
 			Feishu: FeishuConfig{
-				ReplyToMessage: true,
+				FeishuAccountConfig: FeishuAccountConfig{
+					ReplyToMessage: true,
+				},
 			},
 			WechatPersonal: WechatPersonalConfig{
 				BaseURL:             "https://ilinkai.weixin.qq.com",

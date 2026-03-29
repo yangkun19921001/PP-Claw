@@ -25,7 +25,6 @@ import (
 	"github.com/yangkun19921001/PP-Claw/cli/tui"
 	"github.com/yangkun19921001/PP-Claw/config"
 	"github.com/yangkun19921001/PP-Claw/cron"
-	"github.com/yangkun19921001/PP-Claw/providers"
 	"github.com/yangkun19921001/PP-Claw/session"
 	"go.uber.org/zap"
 )
@@ -145,15 +144,6 @@ func runGateway() error {
 	// 创建消息总线
 	msgBus := bus.NewMessageBus()
 
-	// 创建 Provider
-	chatModel, err := providers.NewChatModel(logger, cfg)
-	if err != nil {
-		return fmt.Errorf("创建 Provider 失败: %w", err)
-	}
-
-	// 创建 Session Manager
-	sessions := session.NewManager(ws)
-
 	// 创建并启动 CronService
 	cronSvc := cron.NewService(ws+"/data/cron/jobs.json", logger)
 	cronSvc.SetOnJob(func(job *cron.CronJob) (string, error) {
@@ -167,19 +157,19 @@ func runGateway() error {
 	defer cancel()
 	cronSvc.Start(ctx)
 
-	// 创建 Agent Loop
-	agentLoop, err := agent.NewAgentLoop(&agent.AgentLoopConfig{
+	// 创建路由器和 Agent 环境池
+	router := agent.NewAgentRouter(&cfg.Agents)
+	pool := agent.NewAgentEnvPool(cfg, msgBus, logger, cronSvc)
+
+	// 创建 Agent Loop（多 Agent 并发 dispatcher）
+	agentLoop := agent.NewAgentLoop(&agent.AgentLoopConfig{
 		Bus:         msgBus,
 		Config:      cfg,
-		Workspace:   ws,
 		Logger:      logger,
-		Sessions:    sessions,
-		ChatModel:   chatModel,
+		Router:      router,
+		Pool:        pool,
 		CronService: cronSvc,
 	})
-	if err != nil {
-		return fmt.Errorf("创建 Agent Loop 失败: %w", err)
-	}
 
 	// 启动 Agent Loop (协程)
 	agentReady := make(chan struct{}, 1)
@@ -491,23 +481,17 @@ func runAgent(message, sessionID string) error {
 	os.MkdirAll(ws, 0755)
 
 	msgBus := bus.NewMessageBus()
-	chatModel, err := providers.NewChatModel(logger, cfg)
-	if err != nil {
-		return fmt.Errorf("创建 Provider 失败: %w", err)
-	}
 
-	sessions := session.NewManager(ws)
-	agentLoop, err := agent.NewAgentLoop(&agent.AgentLoopConfig{
-		Bus:       msgBus,
-		Config:    cfg,
-		Workspace: ws,
-		Logger:    logger,
-		Sessions:  sessions,
-		ChatModel: chatModel,
+	router := agent.NewAgentRouter(&cfg.Agents)
+	pool := agent.NewAgentEnvPool(cfg, msgBus, logger, nil)
+
+	agentLoop := agent.NewAgentLoop(&agent.AgentLoopConfig{
+		Bus:    msgBus,
+		Config: cfg,
+		Logger: logger,
+		Router: router,
+		Pool:   pool,
 	})
-	if err != nil {
-		return fmt.Errorf("创建 Agent Loop 失败: %w", err)
-	}
 
 	ctx := context.Background()
 

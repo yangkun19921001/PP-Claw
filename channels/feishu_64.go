@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	"github.com/larksuite/oapi-sdk-go/v3/ws"
@@ -46,13 +48,15 @@ type FeishuChannel struct {
 	mu       sync.Mutex
 	cancel   context.CancelFunc
 
-	dedup          *utils.LRUCache           // 消息去重
+	dedup          *utils.LRUCache          // 消息去重
 	TranscribeFunc func(path string) string // 音频转写回调
 
 	// Config-driven behavior
 	groupPolicy    string // "open" or "mention" (default)
 	reactEmoji     string // emoji type for reaction (e.g. "THUMBSUP")
 	replyToMessage bool   // reply to the original message
+
+	botOpenID string // 启动时自动获取，用于判断 @mention 是否指向自己
 }
 
 func init() {
@@ -104,6 +108,15 @@ func (f *FeishuChannel) Start(ctx context.Context) error {
 	}
 
 	f.Running = true
+
+	// 自动获取 bot open_id，用于多 bot 群聊中判断 @mention 是否指向自己
+	if botOpenID, err := f.fetchBotOpenID(); err != nil {
+		f.Logger.Warn("获取 bot open_id 失败，多 bot 群聊 mention 过滤可能不精确", zap.Error(err))
+	} else {
+		f.botOpenID = botOpenID
+		f.Logger.Info("获取 bot open_id 成功", zap.String("bot_open_id", botOpenID))
+	}
+
 	f.Logger.Info("飞书渠道启动 (WebSocket 模式)")
 
 	// 创建事件分发器
@@ -183,10 +196,24 @@ func (f *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 
 	chatType := ptrValue(msg.ChatType)
 
-	// 群聊 mention 检查：group_policy == "open" 跳过
+	// 群聊 mention 检查
 	rawContent := ptrValue(msg.Content)
-	if chatType == "group" && f.groupPolicy != "open" && !hasBotMention(rawContent, msg.Mentions) {
-		return nil
+	if chatType == "group" {
+		botMentioned := hasBotMention(rawContent, msg.Mentions)
+		otherBotMentioned := botMentioned && f.botOpenID != "" && !isSelfMentioned(f.botOpenID, msg.Mentions)
+
+		switch f.groupPolicy {
+		case "open":
+			// open 模式：如果消息明确 @ 了其它 bot（不是自己），跳过
+			if otherBotMentioned {
+				return nil
+			}
+		default:
+			// mention 模式：必须 @ 自己才处理
+			if !hasBotMention(rawContent, msg.Mentions) {
+				return nil
+			}
+		}
 	}
 
 	// 提取 senderID: 优先 userId > openId
@@ -974,6 +1001,60 @@ func hasBotMention(rawContent string, mentions []*larkim.MentionEvent) bool {
 	return false
 }
 
+// isSelfMentioned 检查 mentions 中是否包含自己的 bot open_id
+func isSelfMentioned(selfOpenID string, mentions []*larkim.MentionEvent) bool {
+	for _, m := range mentions {
+		if m == nil || m.Id == nil {
+			continue
+		}
+		oid := ptrValue(m.Id.OpenId)
+		if oid == selfOpenID {
+			return true
+		}
+	}
+	return false
+}
+
+// fetchBotOpenID 通过飞书 API 获取当前 bot 的 open_id
+func (f *FeishuChannel) fetchBotOpenID() (string, error) {
+	// 先获取 tenant_access_token
+	tokenResp, err := f.client.GetTenantAccessTokenBySelfBuiltApp(context.Background(),
+		&larkcore.SelfBuiltTenantAccessTokenReq{
+			AppID:     f.AppID,
+			AppSecret: f.AppSecret,
+		})
+	if err != nil {
+		return "", fmt.Errorf("获取 tenant_access_token 失败: %w", err)
+	}
+
+	// 调用 /bot/v3/info 获取 bot 信息
+	req, err := http.NewRequest("GET", "https://open.feishu.cn/open-apis/bot/v3/info", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+tokenResp.TenantAccessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("请求 bot info 失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Code int `json:"code"`
+		Bot  struct {
+			OpenID string `json:"open_id"`
+		} `json:"bot"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("解析 bot info 响应失败: %w", err)
+	}
+	if result.Code != 0 {
+		return "", fmt.Errorf("bot info API 返回错误码: %d", result.Code)
+	}
+	return result.Bot.OpenID, nil
+}
+
 // inferFileType 根据扩展名推断飞书文件类型
 func inferFileType(ext string) string {
 	ext = strings.ToLower(ext)
@@ -1204,7 +1285,6 @@ func parseTableRow(line string) []string {
 	}
 	return cells
 }
-
 
 // splitContentByTables 按表格边界拆分内容，每段最多包含 5 张表格
 // 避免触发飞书 card table number over limit (ErrCode 11310)

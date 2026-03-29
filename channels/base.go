@@ -15,6 +15,7 @@ type Channel interface {
 	Start(ctx context.Context) error
 	Stop() error
 	Send(msg *bus.OutboundMessage) error
+	SetAccountID(accountID string)
 }
 
 // RouteRegistrar 可选能力：向 gateway 注册 HTTP 路由
@@ -82,6 +83,11 @@ func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []st
 // SetAccountID 绑定当前渠道实例的账号 ID
 func (c *BaseChannel) SetAccountID(accountID string) {
 	c.AccountID = accountID
+}
+
+// InstanceLabel 返回 "channel:accountID" 格式的实例标识
+func (c *BaseChannel) InstanceLabel() string {
+	return c.ChannelName + ":" + c.AccountID
 }
 
 // ChannelFactory 渠道工厂函数类型

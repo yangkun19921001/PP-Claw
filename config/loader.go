@@ -55,6 +55,80 @@ func ExpandHome(path string) string {
 	return filepath.Join(home, path[1:])
 }
 
+// ResolveAgentDefaults 合并 defaults + agent entry 覆盖值，返回最终生效的配置。
+// 未指定 agentID 或 agents.list 为空时，直接返回 defaults。
+func (c *Config) ResolveAgentDefaults(agentID string) AgentDefaults {
+	d := c.Agents.Defaults
+
+	if agentID == "" || agentID == "default" || len(c.Agents.List) == 0 {
+		return d
+	}
+
+	// 查找 agent entry
+	var entry *AgentEntry
+	for i := range c.Agents.List {
+		if c.Agents.List[i].ID == agentID {
+			entry = &c.Agents.List[i]
+			break
+		}
+	}
+	if entry == nil {
+		return d
+	}
+
+	// 覆盖非零值
+	if entry.Model != "" {
+		d.Model = entry.Model
+	}
+	if entry.Workspace != "" {
+		d.Workspace = entry.Workspace
+	}
+	if entry.MaxTokens > 0 {
+		d.MaxTokens = entry.MaxTokens
+	}
+	if entry.Temperature > 0 {
+		d.Temperature = entry.Temperature
+	}
+	if entry.MaxToolIterations > 0 {
+		d.MaxToolIterations = entry.MaxToolIterations
+	}
+	if entry.MemoryWindow > 0 {
+		d.MemoryWindow = entry.MemoryWindow
+	}
+	if entry.ContextWindowTokens > 0 {
+		d.ContextWindowTokens = entry.ContextWindowTokens
+	}
+	return d
+}
+
+// ResolveDefaultAgentID 返回默认 agent ID：
+// 优先取 agents.list 中 default=true 的，其次取第一个，最后 fallback 到 "default"。
+func (c *Config) ResolveDefaultAgentID() string {
+	if len(c.Agents.List) == 0 {
+		return "default"
+	}
+	for _, a := range c.Agents.List {
+		if a.Default {
+			return a.ID
+		}
+	}
+	return c.Agents.List[0].ID
+}
+
+// ResolveAgentWorkspace 返回指定 agent 的 workspace 路径。
+func (c *Config) ResolveAgentWorkspace(agentID string) string {
+	d := c.ResolveAgentDefaults(agentID)
+	if d.Workspace != "" {
+		return ExpandHome(d.Workspace)
+	}
+	// 未指定 workspace：default agent 用 defaults.workspace，其他放 agents/ 子目录
+	defaultWs := ExpandHome(c.Agents.Defaults.Workspace)
+	if agentID == "" || agentID == "default" {
+		return defaultWs
+	}
+	return filepath.Join(filepath.Dir(defaultWs), "agents", agentID)
+}
+
 // matchProvider 根据 model 前缀匹配 Provider (对标 pp-claw/config/schema.py:_match_provider)
 func (c *Config) matchProvider(model string) (*ProviderConfig, string) {
 	if model == "" {

@@ -7,15 +7,82 @@ agents:
         temperature: 0.1
         max_tool_iterations: 40
         memory_window: 100
+
+    # --- 多 Agent 配置 (可选，不配置则为单 Agent 模式) ---
+    # list 定义多个逻辑 Agent，每个可覆盖 defaults 中的任意字段
+    list:
+        - id: main
+          name: "主助手"
+          default: true                     # 默认 Agent，未匹配 binding 时使用
+          model: anthropic/claude-opus-4-5
+          # workspace: ~/.pp-claw/workspace  # 不指定则使用 defaults.workspace
+
+        - id: code-review
+          name: "代码审查"
+          model: openai/gpt-4o
+          workspace: ~/.pp-claw/agents/code-review
+          max_tokens: 16384
+          temperature: 0.0
+          max_tool_iterations: 20
+
+        - id: translator
+          name: "翻译助手"
+          model: deepseek/deepseek-chat
+          workspace: ~/.pp-claw/agents/translator
+          max_tokens: 4096
+          temperature: 0.3
+          max_tool_iterations: 10
+          memory_window: 50
+
+    # bindings 路由规则：将消息匹配到目标 Agent
+    # 评估顺序自上而下，第一个匹配的胜出
+    # 优先级: sender_ids > chat_ids > channel+account_id > default
+    bindings:
+        # Tier 1: 按发送者路由 — 特定用户的消息发给代码审查 Agent
+        - agent_id: code-review
+          sender_ids: ["user_dev_001", "user_dev_002"]
+
+        # Tier 2: 按会话路由 — 特定群聊发给翻译助手
+        - agent_id: translator
+          channel: feishu
+          chat_ids: ["oc_translation_group_001"]
+
+        # Tier 3: 按账号路由 — 飞书 main 账号消息发给主助手，hr-bot 账号发给 HR Agent
+        - agent_id: main
+          channel: feishu
+          account_id: main
+
+        - agent_id: hr-agent
+          channel: feishu
+          account_id: hr-bot
+
+        # Tier 3: 按频道路由 — 所有 Telegram 消息发给主助手
+        - agent_id: main
+          channel: telegram
+
+        # Tier 4: 兜底路由 — 未匹配的消息发给默认 Agent
+        - agent_id: main
+          default: true
 channels:
     send_progress: false
     send_tool_hints: false
     telegram:
         enabled: false
+        # 顶层字段 = 默认账号配置（无 accounts 时退化为单账号模式）
         token: ""
         allow_from: []
         proxy: ""
         reply_to_message: false
+        # 多账号配置示例（可选）:
+        # 每个账号独立控制 allow_from 等权限
+        # default_account: main
+        # accounts:
+        #     main:
+        #         token: "bot_token_main"
+        #         allow_from: []                 # 不限制
+        #     notify:
+        #         token: "bot_token_notify"
+        #         allow_from: ["admin_123"]      # 仅管理员可触发
     discord:
         enabled: false
         token: ""
@@ -44,15 +111,38 @@ channels:
         allow_from: []
     feishu:
         enabled: true
+        # --- 单账号模式（无 accounts 时，顶层字段即为唯一账号配置）---
         app_id: ${FEISHU_APP_ID}
         app_secret: ${FEISHU_APP_SECRET}
         encrypt_key: ""
         verification_token: ""
         allow_from: []
+        group_policy: "mention"      # "open"=群聊全放行 / "mention"=仅@机器人 / "allowlist"=白名单群
+        react_emoji: "THUMBSUP"
+        reply_to_message: true
         wiki_enabled: true
         docs_enabled: true
         oauth_redirect_url: "http://localhost:18790/feishu/oauth/callback"
         search_max_results: 3
+
+        # --- 多账号模式（可选，配置 accounts 后顶层字段作为公共默认值）---
+        # 顶层的 group_policy/react_emoji/reply_to_message 等会被所有账号继承
+        # 每个账号只需写自己独有的凭证和需要覆盖的字段
+        #
+        # default_account: main
+        # group_policy: "mention"              # 公共默认：仅响应 @
+        # react_emoji: "THUMBSUP"              # 公共默认
+        # reply_to_message: true               # 公共默认
+        # accounts:
+        #     main:
+        #         app_id: "main_app_id"        # 每个账号必须有自己的凭证
+        #         app_secret: "main_secret"
+        #         group_policy: "open"         # 覆盖：main 账号群聊全放行
+        #     hr-bot:
+        #         app_id: "hr_app_id"
+        #         app_secret: "hr_secret"
+        #         allow_from: ["user_hr_001"]  # 覆盖：只接受 HR 的消息
+        #         wiki_enabled: false          # 覆盖：HR 不需要知识库
     dingtalk:
         enabled: false
         client_id: ""
@@ -90,6 +180,18 @@ channels:
         secret: ""
         welcome_message: ""
         allow_from: []
+        # 多账号配置示例（可选）:
+        # 每个账号独立控制 allow_from 等权限
+        # default_account: main
+        # accounts:
+        #     main:
+        #         bot_id: "bot_main"
+        #         secret: "secret_main"
+        #         allow_from: []                 # 不限制
+        #     support:
+        #         bot_id: "bot_support"
+        #         secret: "secret_support"
+        #         allow_from: ["support_team"]   # 仅客服组可触发
     matrix:
         enabled: false
         homeserver: ""

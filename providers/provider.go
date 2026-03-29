@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -22,8 +23,12 @@ import (
 
 // NewChatModel 创建 Eino ChatModel。
 // 优先使用 eino-ext 已提供的原生 provider 组件；仅在框架未提供原生实现时，才回退到 OpenAI-compatible 适配层。
-func NewChatModel(logger *zap.Logger, cfg *config.Config) (model.ToolCallingChatModel, error) {
+// modelOverride 非空时覆盖 cfg.Agents.Defaults.Model，用于多 Agent 场景。
+func NewChatModel(logger *zap.Logger, cfg *config.Config, modelOverride string) (model.ToolCallingChatModel, error) {
 	modelName := cfg.Agents.Defaults.Model
+	if modelOverride != "" {
+		modelName = modelOverride
+	}
 
 	azureCfg := cfg.Providers.AzureOpenAI
 	if azureCfg.APIKey != "" && azureCfg.APIBase != "" {
@@ -293,11 +298,7 @@ func cloneStringMap(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
+	return maps.Clone(in)
 }
 
 func max(a, b int) int {
