@@ -18,29 +18,47 @@ type AgentsConfig struct {
 	Bindings []BindingEntry `yaml:"bindings,omitempty"`
 }
 
+// AgentToolsFilter 工具过滤规则（include 白名单优先于 exclude 黑名单）
+type AgentToolsFilter struct {
+	Include []string `yaml:"include,omitempty"` // 白名单：仅保留这些工具
+	Exclude []string `yaml:"exclude,omitempty"` // 黑名单：移除这些工具
+}
+
+// ContentMatchRule 内容匹配规则（用于路由和工作流触发）
+type ContentMatchRule struct {
+	Keywords   []string `yaml:"keywords,omitempty"`   // 快速：大小写不敏感子串匹配
+	Regex      string   `yaml:"regex,omitempty"`      // 中速：正则匹配
+	LLMRoute   bool     `yaml:"llm_route,omitempty"`  // 慢速：LLM 智能分类
+	LLMPrompt  string   `yaml:"llm_prompt,omitempty"` // 自定义 LLM 分类 prompt
+	Candidates []string `yaml:"candidates,omitempty"` // LLM 可选的 agent ID 列表
+}
+
 // AgentEntry 定义一个命名 Agent（声明式配置，不对应运行时实例）
 type AgentEntry struct {
-	ID                  string  `yaml:"id"`
-	Name                string  `yaml:"name,omitempty"`
-	Default             bool    `yaml:"default,omitempty"`
-	Model               string  `yaml:"model,omitempty"`
-	Workspace           string  `yaml:"workspace,omitempty"`
-	MaxTokens           int     `yaml:"max_tokens,omitempty"`
-	Temperature         float64 `yaml:"temperature,omitempty"`
-	MaxToolIterations   int     `yaml:"max_tool_iterations,omitempty"`
-	MemoryWindow        int     `yaml:"memory_window,omitempty"`
-	ContextWindowTokens int     `yaml:"context_window_tokens,omitempty"`
+	ID                  string            `yaml:"id"`
+	Name                string            `yaml:"name,omitempty"`
+	Default             bool              `yaml:"default,omitempty"`
+	Model               string            `yaml:"model,omitempty"`
+	Workspace           string            `yaml:"workspace,omitempty"`
+	MaxTokens           int               `yaml:"max_tokens,omitempty"`
+	Temperature         float64           `yaml:"temperature,omitempty"`
+	MaxToolIterations   int               `yaml:"max_tool_iterations,omitempty"`
+	MemoryWindow        int               `yaml:"memory_window,omitempty"`
+	ContextWindowTokens int               `yaml:"context_window_tokens,omitempty"`
+	Tools               *AgentToolsFilter `yaml:"tools,omitempty"`       // per-agent 工具过滤
+	DelegatesTo         []string          `yaml:"delegates_to,omitempty"` // 可委托的目标 Agent ID 列表
 }
 
 // BindingEntry 路由规则：将消息匹配到目标 Agent
 // 评估顺序自上而下，第一个匹配的胜出
 type BindingEntry struct {
-	AgentID   string   `yaml:"agent_id"`
-	Channel   string   `yaml:"channel,omitempty"`
-	AccountID string   `yaml:"account_id,omitempty"`
-	ChatIDs   []string `yaml:"chat_ids,omitempty"`
-	SenderIDs []string `yaml:"sender_ids,omitempty"`
-	Default   bool     `yaml:"default,omitempty"`
+	AgentID      string            `yaml:"agent_id"`
+	Channel      string            `yaml:"channel,omitempty"`
+	AccountID    string            `yaml:"account_id,omitempty"`
+	ChatIDs      []string          `yaml:"chat_ids,omitempty"`
+	SenderIDs    []string          `yaml:"sender_ids,omitempty"`
+	Default      bool              `yaml:"default,omitempty"`
+	ContentMatch *ContentMatchRule `yaml:"content_match,omitempty"` // 内容感知路由
 }
 
 // AgentDefaults 默认 Agent 配置

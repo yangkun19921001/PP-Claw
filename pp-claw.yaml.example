@@ -16,6 +16,7 @@ agents:
           default: true                     # 默认 Agent，未匹配 binding 时使用
           model: anthropic/claude-opus-4-5
           # workspace: ~/.pp-claw/workspace  # 不指定则使用 defaults.workspace
+          delegates_to: [code-review, translator]  # 可委托给其他 Agent
 
         - id: code-review
           name: "代码审查"
@@ -24,6 +25,8 @@ agents:
           max_tokens: 16384
           temperature: 0.0
           max_tool_iterations: 20
+          tools:
+              include: [read_file, list_directory, execute, web_search, web_fetch, message]  # 仅保留代码相关工具
 
         - id: translator
           name: "翻译助手"
@@ -33,10 +36,12 @@ agents:
           temperature: 0.3
           max_tool_iterations: 10
           memory_window: 50
+          tools:
+              exclude: [execute, spawn, cron]  # 翻译助手不需要执行命令
 
     # bindings 路由规则：将消息匹配到目标 Agent
     # 评估顺序自上而下，第一个匹配的胜出
-    # 优先级: sender_ids > chat_ids > channel+account_id > default
+    # 优先级: sender_ids > chat_ids > channel+account_id > content_match > default
     bindings:
         # Tier 1: 按发送者路由 — 特定用户的消息发给代码审查 Agent
         - agent_id: code-review
@@ -60,7 +65,23 @@ agents:
         - agent_id: main
           channel: telegram
 
-        # Tier 4: 兜底路由 — 未匹配的消息发给默认 Agent
+        # Tier 4-5: 按内容路由 — 关键词/正则匹配
+        - agent_id: code-review
+          content_match:
+              keywords: ["代码审查", "code review", "review this"]
+
+        - agent_id: translator
+          content_match:
+              keywords: ["翻译", "translate"]
+              regex: "(?i)translate\\s+to\\s+(english|chinese)"
+
+        # Tier 6: LLM 智能路由 (可选，消耗 token，建议用小模型)
+        # - agent_id: auto
+        #   content_match:
+        #       llm_route: true
+        #       candidates: [code-review, translator, main]
+
+        # Tier 7: 兜底路由 — 未匹配的消息发给默认 Agent
         - agent_id: main
           default: true
 channels:

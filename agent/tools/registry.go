@@ -71,6 +71,26 @@ func (r *Registry) Names() []string {
 	return names
 }
 
+// Filter 根据 include/exclude 过滤工具集。include 白名单优先于 exclude 黑名单。
+// filter 为 nil 时不做任何操作。
+func (r *Registry) Filter(include, exclude []string) {
+	if len(include) > 0 {
+		allowed := make(map[string]bool, len(include))
+		for _, name := range include {
+			allowed[name] = true
+		}
+		for name := range r.tools {
+			if !allowed[name] {
+				delete(r.tools, name)
+			}
+		}
+	} else if len(exclude) > 0 {
+		for _, name := range exclude {
+			delete(r.tools, name)
+		}
+	}
+}
+
 // Execute 执行工具 (对标 pp-claw/agent/tools/registry.py:execute)
 func (r *Registry) Execute(ctx context.Context, name string, params map[string]any) string {
 	hint := "\n\n[Analyze the error above and try a different approach.]"

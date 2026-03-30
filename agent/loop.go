@@ -87,7 +87,7 @@ func (l *AgentLoop) Run(ctx context.Context) error {
 			continue
 		}
 
-		agentID := l.router.Resolve(msg.Channel, msg.AccountID, msg.ChatID, msg.SenderID)
+		agentID := l.router.ResolveWithContent(ctx, msg.Channel, msg.AccountID, msg.ChatID, msg.SenderID, msg.Content)
 		go l.dispatch(ctx, agentID, msg)
 	}
 

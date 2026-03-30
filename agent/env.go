@@ -8,6 +8,7 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
 	"github.com/yangkun19921001/PP-Claw/agent/tools"
 	"github.com/yangkun19921001/PP-Claw/bus"
 	"github.com/yangkun19921001/PP-Claw/config"
@@ -16,6 +17,12 @@ import (
 	"github.com/yangkun19921001/PP-Claw/session"
 	"go.uber.org/zap"
 )
+
+// delegationDepthKey context key for tracking delegation recursion depth.
+type delegationDepthKey struct{}
+
+// maxDelegationDepth 最大委托递归深度，防止 A→B→A 循环。
+const maxDelegationDepth = 3
 
 // AgentEnv 一个逻辑 Agent 的全部隔离资源，懒初始化后缓存复用。
 type AgentEnv struct {
@@ -266,6 +273,29 @@ func (p *AgentEnvPool) createEnv(agentID string) (*AgentEnv, error) {
 	// 注册默认工具
 	env.RegisterDefaultTools(p.cfg, p.bus, p.cronService, p.logger)
 
+	// 按 Agent 配置过滤工具集 + 注册 delegate 工具
+	if entry := p.cfg.FindAgentEntry(agentID); entry != nil {
+		// 工具过滤
+		if entry.Tools != nil {
+			env.Tools.Filter(entry.Tools.Include, entry.Tools.Exclude)
+			p.logger.Info("Agent 工具已过滤",
+				zap.String("agent_id", agentID),
+				zap.Int("remaining_tools", len(env.Tools.Names())),
+			)
+		}
+		// 注册 delegate 工具（仅当配置了 delegates_to）
+		if len(entry.DelegatesTo) > 0 {
+			env.Tools.Register(&tools.DelegateTool{
+				AllowedTargets: entry.DelegatesTo,
+				Delegate:       p.Delegate,
+			})
+			p.logger.Info("Agent delegate 工具已注册",
+				zap.String("agent_id", agentID),
+				zap.Strings("delegates_to", entry.DelegatesTo),
+			)
+		}
+	}
+
 	// 初始化 ADK
 	ctx := context.Background()
 	if err := env.InitEinoADK(ctx); err != nil {
@@ -292,6 +322,44 @@ func (p *AgentEnvPool) Close() {
 		env.CloseMCP()
 		p.logger.Info("AgentEnv 已关闭", zap.String("agent_id", id))
 	}
+}
+
+// Delegate 同步委托任务给目标 Agent（in-process 调用，不经过 MessageBus）。
+// 通过 context 传递递归深度计数器，超过 maxDelegationDepth 时返回错误。
+func (p *AgentEnvPool) Delegate(ctx context.Context, targetAgentID, task string) (string, error) {
+	// 检查递归深度
+	depth, _ := ctx.Value(delegationDepthKey{}).(int)
+	if depth >= maxDelegationDepth {
+		return "", fmt.Errorf("delegation depth exceeded (max %d): refusing to delegate to %q", maxDelegationDepth, targetAgentID)
+	}
+	ctx = context.WithValue(ctx, delegationDepthKey{}, depth+1)
+
+	// 获取目标 AgentEnv
+	env, err := p.GetOrCreate(targetAgentID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get agent %q: %w", targetAgentID, err)
+	}
+
+	// 构建临时消息上下文（不占用 session，不走 MessageBus）
+	sysPrompt := env.Context.BuildSystemPrompt()
+	messages := []*schema.Message{
+		{Role: schema.System, Content: sysPrompt},
+		{Role: schema.User, Content: task},
+	}
+
+	// 同步执行目标 Agent 的 ADK Runner
+	content, _, err := runWithADK(ctx, env, messages, nil, p.logger)
+	if err != nil {
+		return "", fmt.Errorf("delegation to %q failed: %w", targetAgentID, err)
+	}
+
+	p.logger.Info("委托执行完成",
+		zap.String("target_agent", targetAgentID),
+		zap.Int("depth", depth+1),
+		zap.Int("result_length", len(content)),
+	)
+
+	return content, nil
 }
 
 // GetFeishuOAuthHandler 遍历所有 env 查找飞书 OAuth handler。

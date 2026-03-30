@@ -10,7 +10,7 @@
   <a href="https://github.com/yangkun19921001/PP-Claw"><img src="https://img.shields.io/badge/Based_on-nanobot-orange?style=for-the-badge" alt="Based on nanobot"></a>
 </p>
 
-<p><strong>18 个 LLM Provider · 12 个消息渠道 · MCP 工具扩展 · 长期记忆 · 子代理 · 定时任务</strong></p>
+<p><strong>多 Agent 军团 · 18 个 LLM Provider · 12 个消息渠道 · MCP 工具扩展 · 长期记忆 · 子代理 · 定时任务</strong></p>
 
 </div>
 
@@ -29,8 +29,9 @@
 | 模块 | 能力 |
 |---|---|
 | 🤖 **LLM Provider** | OpenAI / Anthropic / DeepSeek / Gemini / Groq / OpenRouter / Azure OpenAI / 智谱 / 通义千问 / Moonshot / MiniMax / SiliconFlow / 火山引擎 / vLLM 等 **18+** |
-| 💬 **消息渠道** | Telegram / Discord / Slack / 飞书 / 钉钉 / WhatsApp / Email / QQ / MoChat / 企业微信 / 个人微信 / Matrix **共 12 个** |
-| 🔧 **内置工具** | 文件读写编辑 / Shell 执行 / Web 搜索+抓取 / 消息发送(含媒体) / 子代理 / 定时任务 / 飞书知识库+文档+Aily |
+| 💬 **消息渠道** | Telegram / Discord / Slack / 飞书 / 钉钉 / WhatsApp / Email / QQ / MoChat / 企业微信 / 个人微信 / Matrix **共 12 个**，支持多账号 |
+| 🪖 **多 Agent 军团** | 多 Agent 定义 / Per-Agent 工具定制 / Agent 间委托协作 / 7 层智能路由 / Controller 模式编排 |
+| 🔧 **内置工具** | 文件读写编辑 / Shell 执行 / Web 搜索+抓取 / 消息发送(含媒体) / 子代理 / Agent 委托 / 定时任务 / 飞书知识库+文档+Aily |
 | 🔌 **MCP 协议** | Stdio / SSE / Streamable HTTP 三种传输，自动发现注册工具 |
 | 🧠 **智能记忆** | LLM 驱动双层记忆（MEMORY.md 长期事实 + HISTORY.md 事件日志），Token 级自动整合 |
 | 🤝 **子代理** | 后台独立 LLM 循环，拥有文件/Shell/Web 工具，`/stop` 一键取消 |
@@ -314,6 +315,233 @@ channels:
 
 ---
 
+## 🪖 多 Agent 架构
+
+PP-Claw 支持定义多个逻辑 Agent，每个 Agent 可拥有独立的模型、工具集、workspace 和参数。消息通过 **7 层路由** 自动分发到目标 Agent，Agent 之间可通过 **`delegate` 工具** 互相协作。
+
+> 不配置 `agents.list` 时自动退化为单 Agent 模式，完全向后兼容。
+
+### 多 Agent 定义
+
+```yaml
+agents:
+  defaults:
+    workspace: ~/.pp-claw/workspace
+    model: deepseek-chat
+    max_tokens: 8192
+    temperature: 0.1
+
+  list:
+    - id: main
+      name: "主助手"
+      default: true                          # 默认 Agent
+      model: anthropic/claude-opus-4-5
+      delegates_to: [code-review, translator] # 可委托的目标 Agent
+
+    - id: code-review
+      name: "代码审查"
+      model: openai/gpt-4o
+      workspace: ~/.pp-claw/agents/code-review
+      max_tokens: 16384
+      temperature: 0.0
+      tools:
+        include: [read_file, list_directory, execute, web_search, web_fetch, message]
+
+    - id: translator
+      name: "翻译助手"
+      model: deepseek/deepseek-chat
+      workspace: ~/.pp-claw/agents/translator
+      tools:
+        exclude: [execute, spawn, cron]
+```
+
+每个 Agent 支持的字段：
+
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `id` | 唯一标识 | 必填 |
+| `name` | 显示名称 | — |
+| `default` | 是否为默认 Agent | `false` |
+| `model` | 使用的模型（覆盖 defaults） | `defaults.model` |
+| `workspace` | 独立工作目录 | `defaults.workspace` |
+| `max_tokens` | 最大输出 Token | `defaults.max_tokens` |
+| `temperature` | 温度 | `defaults.temperature` |
+| `max_tool_iterations` | 最大工具调用轮数 | `defaults.max_tool_iterations` |
+| `memory_window` | 记忆窗口大小 | `defaults.memory_window` |
+| `tools` | 工具过滤规则 | 继承全部工具 |
+| `delegates_to` | 可委托的目标 Agent 列表 | 空（不可委托） |
+
+### Per-Agent 工具定制
+
+通过 `tools.include`（白名单）或 `tools.exclude`（黑名单）控制每个 Agent 可用的工具：
+
+```yaml
+agents:
+  list:
+    # 白名单：只保留指定工具
+    - id: code-review
+      tools:
+        include: [read_file, list_directory, execute, web_search, message]
+
+    # 黑名单：去掉危险工具
+    - id: translator
+      tools:
+        exclude: [execute, spawn, cron]
+
+    # 不写 tools = 继承全部默认工具
+    - id: main
+```
+
+- `include` 和 `exclude` 互斥，`include` 优先
+- 不配置 `tools` 字段时继承全部默认工具
+
+### Agent 间委托协作
+
+配置 `delegates_to` 后，Agent 会自动获得 `delegate` 工具，可在对话中调用其他 Agent：
+
+```yaml
+agents:
+  list:
+    - id: boss
+      delegates_to: [translator, code-review]  # boss 可以委托这两个 Agent
+```
+
+LLM 在需要时会自动调用 `delegate` 工具：
+
+```
+用户: 帮我把这段代码翻译成英文
+Boss Agent → delegate(target_agent="translator", task="翻译以下代码注释...")
+Translator Agent → 返回翻译结果
+Boss Agent → 整合结果回复用户
+```
+
+**安全防护**：
+
+- 递归深度控制（默认最大 3 层），防止 A→B→A 循环委托
+- 委托使用临时上下文，不污染目标 Agent 的会话历史
+- 同步 in-process 调用，无 RPC 开销
+
+### Controller 模式编排
+
+利用 `delegates_to` + 系统提示词，可实现动态工作流编排，无需额外配置：
+
+```yaml
+agents:
+  list:
+    - id: controller
+      default: true
+      model: anthropic/claude-opus-4-5
+      delegates_to: [translator, code-review, researcher]
+```
+
+在 Controller Agent 的 workspace 中配置系统提示词（`SYSTEM.md`），指导它根据任务类型动态编排：
+
+```markdown
+你是一个任务编排控制器。根据用户请求，使用 delegate 工具将任务分配给合适的 Agent：
+- 翻译任务 → translator
+- 代码审查 → code-review
+- 资料搜索 → researcher
+对于复杂任务，可以先委托一个 Agent 完成子任务，再将结果传给下一个 Agent。
+```
+
+### 7 层智能路由
+
+消息从渠道进入后，按以下优先级匹配目标 Agent：
+
+| 优先级 | 层级 | 匹配方式 | 延迟 |
+|--------|------|---------|------|
+| Tier 1 | `sender_ids` | 按发送者 ID | 即时 |
+| Tier 2 | `chat_ids` | 按会话/群聊 ID | 即时 |
+| Tier 3 | `channel` + `account_id` | 按渠道+账号 | 即时 |
+| Tier 4 | `content_match.keywords` | 关键词匹配 | <1μs |
+| Tier 5 | `content_match.regex` | 正则匹配 | ~10μs |
+| Tier 6 | `content_match.llm_route` | LLM 智能分类 | ~500ms（缓存命中 <1μs） |
+| Tier 7 | `default: true` | 兜底路由 | 即时 |
+
+```yaml
+agents:
+  bindings:
+    # Tier 1: 按发送者路由
+    - agent_id: code-review
+      sender_ids: ["user_dev_001", "user_dev_002"]
+
+    # Tier 2: 按会话路由
+    - agent_id: translator
+      channel: feishu
+      chat_ids: ["oc_translation_group"]
+
+    # Tier 3: 按渠道+账号路由
+    - agent_id: main
+      channel: feishu
+      account_id: main
+
+    # Tier 4: 关键词路由（快速）
+    - agent_id: code-review
+      content_match:
+        keywords: ["代码审查", "code review", "review this"]
+
+    # Tier 5: 正则路由
+    - agent_id: translator
+      content_match:
+        keywords: ["翻译", "translate"]
+        regex: "(?i)translate\\s+to\\s+(english|chinese)"
+
+    # Tier 6: LLM 智能路由（消耗 token，建议用小模型）
+    # - agent_id: auto
+    #   content_match:
+    #     llm_route: true
+    #     candidates: [code-review, translator, main]
+    #     llm_prompt: "自定义分类提示词（可选）"
+
+    # Tier 7: 兜底
+    - agent_id: main
+      default: true
+```
+
+**LLM 路由性能优化**：内置 LRU 缓存（SHA256 内容哈希，5 分钟 TTL，最大 1000 条），相同内容重复路由时直接命中缓存。
+
+### 多账号渠道配置
+
+飞书、Telegram、企业微信等渠道支持多账号模式，每个账号可独立控制权限：
+
+```yaml
+channels:
+  feishu:
+    enabled: true
+    # 顶层字段作为公共默认值
+    group_policy: "mention"
+    react_emoji: "THUMBSUP"
+    reply_to_message: true
+
+    # 多账号配置
+    default_account: main
+    accounts:
+      main:
+        app_id: "main_app_id"
+        app_secret: "main_secret"
+        group_policy: "open"           # 覆盖默认值
+      hr-bot:
+        app_id: "hr_app_id"
+        app_secret: "hr_secret"
+        allow_from: ["user_hr_001"]    # 仅 HR 可触发
+        wiki_enabled: false
+```
+
+结合 `bindings` 可将不同账号的消息路由到不同 Agent：
+
+```yaml
+agents:
+  bindings:
+    - agent_id: main
+      channel: feishu
+      account_id: main
+    - agent_id: hr-agent
+      channel: feishu
+      account_id: hr-bot
+```
+
+---
+
 ## 🔧 工具系统
 
 ### 内置工具
@@ -325,6 +553,7 @@ channels:
 | `web_search` | Brave Search API 搜索 |
 | `web_fetch` | 网页抓取，HTML→文本，SSRF 防护 |
 | `message` | 消息发送，支持文本+媒体附件（图片/音频/视频/文档） |
+| `delegate` | Agent 间委托协作，同步调用目标 Agent 并返回结果 |
 | `spawn` | 后台子代理，独立 LLM 循环 |
 | `cron` | 定时任务管理（add/list/remove） |
 | `feishu_wiki` | 飞书知识库：空间列表/节点浏览/文档搜索 |
@@ -423,6 +652,38 @@ agents:
     memory_window: 100
     context_window_tokens: 65536
 
+  # 多 Agent 配置（可选，不配置则为单 Agent 模式）
+  list:
+    - id: main
+      name: "主助手"
+      default: true
+      model: anthropic/claude-opus-4-5
+      delegates_to: [code-review, translator]
+
+    - id: code-review
+      name: "代码审查"
+      model: openai/gpt-4o
+      workspace: ~/.pp-claw/agents/code-review
+      tools:
+        include: [read_file, list_directory, execute, web_search, web_fetch, message]
+
+    - id: translator
+      name: "翻译助手"
+      model: deepseek/deepseek-chat
+      tools:
+        exclude: [execute, spawn, cron]
+
+  # 路由规则（评估顺序自上而下，第一个匹配胜出）
+  bindings:
+    - agent_id: code-review
+      content_match:
+        keywords: ["代码审查", "code review"]
+    - agent_id: translator
+      content_match:
+        keywords: ["翻译", "translate"]
+    - agent_id: main
+      default: true
+
 providers:
   deepseek:
     api_key: "sk-your-key"
@@ -481,12 +742,15 @@ PP-Claw/
 │   └── tui/                     # Bubble Tea 交互界面
 ├── agent/
 │   ├── loop.go                  # Agent 核心循环 (Eino ADK)
+│   ├── env.go                   # Agent 环境池 + 委托调用
+│   ├── router.go                # 7 层智能路由
+│   ├── content_router.go        # 内容感知路由（keyword/regex/LLM）
 │   ├── context.go               # 上下文构建
 │   ├── memory.go                # 双层记忆系统
 │   ├── memory_consolidator.go   # Token 级记忆整合
 │   ├── skills.go                # 技能加载器
 │   ├── subagent.go              # 子代理管理器
-│   └── tools/                   # 13+ 内置工具
+│   └── tools/                   # 14+ 内置工具（含 delegate）
 ├── bus/                         # 消息总线
 ├── channels/                    # 12 个渠道实现
 ├── config/                      # 配置 Schema + YAML 加载

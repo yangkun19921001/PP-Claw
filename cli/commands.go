@@ -149,7 +149,12 @@ func runGateway() error {
 	cronSvc.SetOnJob(func(job *cron.CronJob) (string, error) {
 		// 使用原始 channel 和 chatID，确保响应能路由回正确的渠道
 		inbound := bus.NewInboundMessage(job.Payload.Channel, "cron", job.Payload.To, job.Payload.Message)
-		inbound.AccountID = job.Payload.Account
+		// 补全 accountID：cron payload 可能为空（历史任务或创建时未设置）
+		accountID := job.Payload.Account
+		if accountID == "" && job.Payload.Channel != "" {
+			accountID = cfg.Channels.DefaultAccountIDForChannel(job.Payload.Channel)
+		}
+		inbound.AccountID = accountID
 		msgBus.PublishInbound(inbound)
 		return "Job dispatched to agent", nil
 	})
@@ -158,7 +163,7 @@ func runGateway() error {
 	cronSvc.Start(ctx)
 
 	// 创建路由器和 Agent 环境池
-	router := agent.NewAgentRouter(&cfg.Agents)
+	router := agent.NewAgentRouter(&cfg.Agents, logger)
 	pool := agent.NewAgentEnvPool(cfg, msgBus, logger, cronSvc)
 
 	// 创建 Agent Loop（多 Agent 并发 dispatcher）
@@ -482,7 +487,7 @@ func runAgent(message, sessionID string) error {
 
 	msgBus := bus.NewMessageBus()
 
-	router := agent.NewAgentRouter(&cfg.Agents)
+	router := agent.NewAgentRouter(&cfg.Agents, logger)
 	pool := agent.NewAgentEnvPool(cfg, msgBus, logger, nil)
 
 	agentLoop := agent.NewAgentLoop(&agent.AgentLoopConfig{

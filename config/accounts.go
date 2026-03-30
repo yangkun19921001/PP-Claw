@@ -245,3 +245,34 @@ func (c *MatrixConfig) ResolveAccounts() map[string]MatrixAccountConfig {
 func (c *MatrixConfig) DefaultAccountID() string {
 	return defaultAccountID(c.DefaultAccount, mapKeys(c.Accounts))
 }
+
+// DefaultAccountIDForChannel 返回指定渠道的默认账号 ID。
+// 当 cron 等场景中 accountID 为空时，用此方法补全。
+func (c *ChannelsConfig) DefaultAccountIDForChannel(channel string) string {
+	switch channel {
+	case "telegram":
+		return c.Telegram.DefaultAccountID()
+	case "discord":
+		return c.Discord.DefaultAccountID()
+	case "slack":
+		return c.Slack.DefaultAccountID()
+	case "whatsapp":
+		return c.WhatsApp.DefaultAccountID()
+	case "feishu":
+		return c.Feishu.DefaultAccountID()
+	case "dingtalk":
+		return c.DingTalk.DefaultAccountID()
+	case "email":
+		return c.Email.DefaultAccountID()
+	case "qq":
+		return c.QQ.DefaultAccountID()
+	case "mochat":
+		return c.Mochat.DefaultAccountID()
+	case "wecom":
+		return c.Wecom.DefaultAccountID()
+	case "matrix":
+		return c.Matrix.DefaultAccountID()
+	default:
+		return "default"
+	}
+}

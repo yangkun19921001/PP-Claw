@@ -129,6 +129,16 @@ func (c *Config) ResolveAgentWorkspace(agentID string) string {
 	return filepath.Join(filepath.Dir(defaultWs), "agents", agentID)
 }
 
+// FindAgentEntry 查找指定 agentID 的 AgentEntry，未找到返回 nil。
+func (c *Config) FindAgentEntry(agentID string) *AgentEntry {
+	for i := range c.Agents.List {
+		if c.Agents.List[i].ID == agentID {
+			return &c.Agents.List[i]
+		}
+	}
+	return nil
+}
+
 // matchProvider 根据 model 前缀匹配 Provider (对标 pp-claw/config/schema.py:_match_provider)
 func (c *Config) matchProvider(model string) (*ProviderConfig, string) {
 	if model == "" {
