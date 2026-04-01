@@ -1,8 +1,10 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"strings"
@@ -19,6 +21,16 @@ import (
 	"github.com/yangkun19921001/PP-Claw/config"
 	"go.uber.org/zap"
 	"google.golang.org/genai"
+)
+
+const (
+	// llmResponseHeaderTimeout 等待 LLM API 返回响应头的最长时间。
+	// 使用 ResponseHeaderTimeout 而非 Client.Timeout，避免中断 streaming 响应。
+	llmResponseHeaderTimeout = 5 * time.Minute
+	// llmRetryMax 5xx / 网络错误最大重试次数。
+	llmRetryMax = 2
+	// llmRetryBaseDelay 重试指数退避基础延迟（3s → 6s）。
+	llmRetryBaseDelay = 3 * time.Second
 )
 
 // NewChatModel 创建 Eino ChatModel。
@@ -283,15 +295,30 @@ func buildProviderHeaders(providerName string, provider *config.ProviderConfig) 
 }
 
 func buildHTTPClient(headers map[string]string) *http.Client {
-	if len(headers) == 0 {
-		return nil
+	// Clone default transport, add response header timeout
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		base = &http.Transport{}
 	}
-	return &http.Client{
-		Transport: &headerRoundTripper{
-			base:    http.DefaultTransport,
+	transport := base.Clone()
+	transport.ResponseHeaderTimeout = llmResponseHeaderTimeout
+
+	// Wrap with retry
+	var rt http.RoundTripper = &retryRoundTripper{
+		base:       transport,
+		maxRetries: llmRetryMax,
+		baseDelay:  llmRetryBaseDelay,
+	}
+
+	// Wrap with custom headers if needed
+	if len(headers) > 0 {
+		rt = &headerRoundTripper{
+			base:    rt,
 			headers: headers,
-		},
+		}
 	}
+
+	return &http.Client{Transport: rt}
 }
 
 func cloneStringMap(in map[string]string) map[string]string {
@@ -321,4 +348,70 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		cloned.Header.Set(k, v)
 	}
 	return t.base.RoundTrip(cloned)
+}
+
+// retryRoundTripper 在 5xx 或网络错误时自动重试，指数退避。
+type retryRoundTripper struct {
+	base       http.RoundTripper
+	maxRetries int
+	baseDelay  time.Duration
+}
+
+func (t *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Buffer request body for potential retries
+	var bodyBytes []byte
+	if req.Body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(req.Body)
+		req.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var lastResp *http.Response
+	var lastErr error
+
+	for attempt := 0; attempt <= t.maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := t.baseDelay * time.Duration(1<<(attempt-1))
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-time.After(delay):
+			}
+		}
+
+		attemptReq := req.Clone(req.Context())
+		if bodyBytes != nil {
+			attemptReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			attemptReq.ContentLength = int64(len(bodyBytes))
+		} else {
+			attemptReq.Body = nil
+		}
+
+		lastResp, lastErr = t.base.RoundTrip(attemptReq)
+		if lastErr != nil {
+			if req.Context().Err() != nil {
+				return nil, req.Context().Err()
+			}
+			continue // network error — retry
+		}
+
+		if lastResp.StatusCode < 500 {
+			return lastResp, nil // 2xx/3xx/4xx — no retry
+		}
+
+		// 5xx — drain body and retry (unless last attempt)
+		if attempt < t.maxRetries {
+			io.Copy(io.Discard, lastResp.Body)
+			lastResp.Body.Close()
+			lastResp = nil
+		}
+	}
+
+	if lastResp != nil {
+		return lastResp, nil // return final 5xx response
+	}
+	return nil, lastErr // return final network error
 }
