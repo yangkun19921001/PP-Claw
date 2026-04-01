@@ -40,6 +40,7 @@
 | 💓 **心跳检查** | 定期执行 HEARTBEAT.md 待办任务，智能评估是否通知 |
 | 🛡️ **安全防护** | SSRF 拦截 / Shell 危险命令阻断 / 路径遍历检测 / workspace 沙箱 |
 | 📡 **实时进度** | 工具调用时向渠道推送进度提示 |
+| 📊 **渠道状态面板** | `channels status` 自动检测 gateway — 在线显示运行时状态，离线回退配置视图；TUI 头部实时展示在线渠道摘要 |
 | 🚀 **Prompt Caching** | Anthropic 自动注入 caching header |
 
 ---
@@ -721,13 +722,46 @@ tools:
 | `pp-claw agent` | 交互模式 |
 | `pp-claw agent -m "..."` | 单次对话 |
 | `pp-claw status` | 运行状态 |
-| `pp-claw channels status` | 渠道状态 |
+| `pp-claw channels status` | 渠道状态（自动检测 gateway：在线显示运行时状态，离线回退配置视图） |
 | `pp-claw channels wechat login --account wx1` | 通过 gateway 发起个人微信扫码登录 |
 | `pp-claw channels wechat status` | 查看个人微信运行状态 |
 | `pp-claw cron list/add/remove/run/enable` | 定时任务管理 |
 | `pp-claw version` | 版本信息 |
 
 交互模式命令：`/new`（新会话）、`/stop`（取消任务）、`/help`（帮助）、`exit`（退出）
+
+<details>
+<summary>channels status 示例输出</summary>
+
+**Gateway 在线时**（自动查询运行时 API）：
+
+```
+🦐 PP-Claw Channel Status (gateway: ● online)
+
+  渠道                 账号               状态
+  ────────────────────────────────────────────────────────
+  feishu               main             ● running
+  feishu               hr-bot           ● running
+  telegram             default          ● running
+  wechat_personal      wx1              ● running (logged_in)
+  dingtalk             -                ○ disabled
+```
+
+**Gateway 离线时**（回退到配置文件）：
+
+```
+🦐 PP-Claw Channel Status (gateway: ○ offline — showing config)
+
+  渠道                 状态         账号
+  ────────────────────────────────────────────────────────
+  feishu               ● enabled   main, hr-bot
+  telegram             ● enabled
+  dingtalk             ○ disabled
+```
+
+TUI 交互模式下，头部栏会显示在线渠道摘要，如 `feishu(2) · telegram(1) · wechat(1)`。
+
+</details>
 
 ---
 

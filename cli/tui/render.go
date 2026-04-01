@@ -14,7 +14,7 @@ import (
 var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 // renderHeader 渲染头部栏
-func renderHeader(modelName string, width int) string {
+func renderHeader(modelName, channelsSummary string, width int) string {
 	brand := headerBrandStyle.Render("🦐 PP-Claw")
 	model := modelName
 	if model == "" {
@@ -29,8 +29,15 @@ func renderHeader(modelName string, width int) string {
 		gap = 1
 	}
 
-	content := brand + strings.Repeat(" ", gap) + modelTag
-	return headerStyle.Width(width).Render(content)
+	line1 := brand + strings.Repeat(" ", gap) + modelTag
+
+	if channelsSummary == "" {
+		return headerStyle.Width(width).Render(line1)
+	}
+
+	// 第二行：渠道在线摘要
+	chLine := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(channelsSummary)
+	return headerStyle.Width(width).Render(line1 + "\n" + chLine)
 }
 
 // renderStatusBar 渲染动态状态栏

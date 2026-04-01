@@ -2,7 +2,9 @@ package channels
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 
@@ -326,7 +328,8 @@ func (m *Manager) RegisterRoutes(mux *http.ServeMux) {
 	}
 }
 
-// StatusSnapshot 返回带运行信息的渠道状态快照（两级结构：channel → accounts）
+// StatusSnapshot 返回带运行信息的渠道状态快照（两级结构：channel → accounts）。
+// 包含所有已注册工厂的渠道，未实例化的标记为 disabled。
 func (m *Manager) StatusSnapshot() map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -357,6 +360,18 @@ func (m *Manager) StatusSnapshot() map[string]any {
 			"accounts": accounts,
 		}
 	}
+
+	// 补全未启用/未实例化的渠道
+	enabledMap := m.config.Channels.GetEnabledMap()
+	for name := range enabledMap {
+		if _, exists := snapshot[name]; !exists {
+			snapshot[name] = map[string]any{
+				"enabled":  enabledMap[name],
+				"accounts": map[string]any{},
+			}
+		}
+	}
+
 	return snapshot
 }
 
@@ -371,7 +386,32 @@ func (m *Manager) EnabledChannels() []string {
 	for name := range seen {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
+}
+
+// OnlineSummary 返回在线渠道摘要字符串，如 "feishu(3) · wechat(1)"
+func (m *Manager) OnlineSummary() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	counts := make(map[string]int)
+	for key := range m.instances {
+		parts := strings.SplitN(key, ":", 2)
+		counts[parts[0]]++
+	}
+
+	names := make([]string, 0, len(counts))
+	for name := range counts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("%s(%d)", name, counts[name]))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // mapKeys 从 map 中提取所有 key

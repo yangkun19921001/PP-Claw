@@ -246,6 +246,41 @@ func (c *MatrixConfig) DefaultAccountID() string {
 	return defaultAccountID(c.DefaultAccount, mapKeys(c.Accounts))
 }
 
+// AccountNamesForChannel 返回指定渠道配置中的所有账号名称。
+func (c *ChannelsConfig) AccountNamesForChannel(channel string) []string {
+	var keys []string
+	switch channel {
+	case "telegram":
+		keys = mapKeys(c.Telegram.ResolveAccounts())
+	case "discord":
+		keys = mapKeys(c.Discord.ResolveAccounts())
+	case "slack":
+		keys = mapKeys(c.Slack.ResolveAccounts())
+	case "whatsapp":
+		keys = mapKeys(c.WhatsApp.ResolveAccounts())
+	case "feishu":
+		keys = mapKeys(c.Feishu.ResolveAccounts())
+	case "dingtalk":
+		keys = mapKeys(c.DingTalk.ResolveAccounts())
+	case "email":
+		keys = mapKeys(c.Email.ResolveAccounts())
+	case "qq":
+		keys = mapKeys(c.QQ.ResolveAccounts())
+	case "mochat":
+		keys = mapKeys(c.Mochat.ResolveAccounts())
+	case "wecom":
+		keys = mapKeys(c.Wecom.ResolveAccounts())
+	case "matrix":
+		keys = mapKeys(c.Matrix.ResolveAccounts())
+	case "wechat_personal":
+		for id := range c.WechatPersonal.Accounts {
+			keys = append(keys, id)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // DefaultAccountIDForChannel 返回指定渠道的默认账号 ID。
 // 当 cron 等场景中 accountID 为空时，用此方法补全。
 func (c *ChannelsConfig) DefaultAccountIDForChannel(channel string) string {

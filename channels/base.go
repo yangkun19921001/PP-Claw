@@ -38,6 +38,12 @@ type BaseChannel struct {
 	Running     bool
 }
 
+// Status 默认实现 StatusProvider，返回基础运行状态。
+// 子渠道（如 wechat_personal）可覆盖此方法返回更丰富的状态。
+func (c *BaseChannel) Status() map[string]any {
+	return map[string]any{"running": c.Running}
+}
+
 // IsAllowed 检查发送者是否被允许 (对标 base.py:is_allowed)
 func (c *BaseChannel) IsAllowed(senderID string) bool {
 	if len(c.AllowFrom) == 0 {

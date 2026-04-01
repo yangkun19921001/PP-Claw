@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -528,7 +529,7 @@ func runAgent(message, sessionID string) error {
 	}()
 
 	// 启动 Bubble Tea TUI (阻塞直到退出)
-	if err := tui.RunChat(ctx, msgBus, cancel, cfg.Agents.Defaults.Model); err != nil {
+	if err := tui.RunChat(ctx, msgBus, cancel, cfg.Agents.Defaults.Model, ""); err != nil {
 		return fmt.Errorf("TUI runtime error: %w", err)
 	}
 
@@ -595,20 +596,167 @@ func showChannelStatus() error {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
 
-	fmt.Println("Channel Status:")
-	enabledMap := cfg.Channels.GetEnabledMap()
+	// 尝试查询运行中的 gateway
+	var snapshot map[string]json.RawMessage
+	err = gatewayJSONRequest(http.MethodGet, "/channels/status", nil, &snapshot)
+	if err == nil {
+		return showChannelStatusOnline(snapshot)
+	}
 
-	for name, enabled := range enabledMap {
-		status := "disabled"
-		if enabled {
-			status = "enabled"
+	// gateway 不可达，回退到配置
+	return showChannelStatusOffline(cfg)
+}
+
+// showChannelStatusOnline 从 gateway API 获取运行时状态并展示
+func showChannelStatusOnline(snapshot map[string]json.RawMessage) error {
+	fmt.Println("\033[1m🦐 PP-Claw Channel Status\033[0m (gateway: \033[32m●\033[0m online)")
+	fmt.Println()
+
+	// 解析并排序渠道名
+	type channelInfo struct {
+		Enabled  bool                       `json:"enabled"`
+		Accounts map[string]map[string]any  `json:"accounts"`
+	}
+
+	parsed := make(map[string]channelInfo)
+	names := make([]string, 0, len(snapshot))
+	for name, raw := range snapshot {
+		var info channelInfo
+		_ = json.Unmarshal(raw, &info)
+		parsed[name] = info
+		names = append(names, name)
+	}
+	sortChannelNames(names)
+
+	// 表头
+	fmt.Printf("  \033[1m%-20s %-16s %s\033[0m\n", "渠道", "账号", "状态")
+	fmt.Printf("  %s\n", strings.Repeat("─", 56))
+
+	for _, name := range names {
+		info := parsed[name]
+		if !info.Enabled || len(info.Accounts) == 0 {
+			fmt.Printf("  %-20s %-16s \033[90m○ disabled\033[0m\n", name, "-")
+			continue
 		}
-		fmt.Printf("  %-12s %s\n", name, status)
-		if name == "wechat_personal" && enabled {
-			fmt.Printf("  %-12s accounts=%d\n", "", len(cfg.Channels.WechatPersonal.Accounts))
+
+		// wechat_personal 特殊处理：单实例(default)内嵌多账号列表
+		if name == "wechat_personal" {
+			printWechatAccounts(name, info.Accounts)
+			continue
+		}
+
+		accNames := make([]string, 0, len(info.Accounts))
+		for accName := range info.Accounts {
+			accNames = append(accNames, accName)
+		}
+		sortChannelNames(accNames)
+
+		for i, accName := range accNames {
+			acc := info.Accounts[accName]
+			label := name
+			if i > 0 {
+				label = ""
+			}
+
+			status := "\033[32m● running\033[0m"
+			if running, ok := acc["running"].(bool); ok && !running {
+				status = "\033[31m● stopped\033[0m"
+			}
+
+			fmt.Printf("  %-20s %-16s %s\n", label, accName, status)
 		}
 	}
 	return nil
+}
+
+// printWechatAccounts 解析 wechat_personal 的嵌套账号列表
+func printWechatAccounts(name string, instances map[string]map[string]any) {
+	// wechat 在 StatusSnapshot 中是 {"default": {"accounts": [...]}}
+	first := true
+	for _, inst := range instances {
+		rawAccounts, ok := inst["accounts"]
+		if !ok {
+			continue
+		}
+		// accounts 可能是 []any（从 JSON 反序列化）
+		accounts, ok := rawAccounts.([]any)
+		if !ok {
+			continue
+		}
+		for _, rawAcc := range accounts {
+			acc, ok := rawAcc.(map[string]any)
+			if !ok {
+				continue
+			}
+			label := name
+			if !first {
+				label = ""
+			}
+			first = false
+
+			accID, _ := acc["account_id"].(string)
+			active, _ := acc["active"].(bool)
+			loggedIn, _ := acc["logged_in"].(bool)
+
+			status := "\033[31m● stopped\033[0m"
+			if active {
+				status = "\033[32m● running\033[0m"
+			}
+			var extra []string
+			if loggedIn {
+				extra = append(extra, "logged_in")
+			} else {
+				extra = append(extra, "not_logged_in")
+			}
+			if lastErr, _ := acc["last_error"].(string); lastErr != "" {
+				extra = append(extra, "err: "+lastErr)
+			}
+			if len(extra) > 0 {
+				status += " (" + strings.Join(extra, ", ") + ")"
+			}
+			fmt.Printf("  %-20s %-16s %s\n", label, accID, status)
+		}
+	}
+	if first {
+		// 没有任何账号
+		fmt.Printf("  %-20s %-16s \033[90m○ no accounts\033[0m\n", name, "-")
+	}
+}
+
+// showChannelStatusOffline 从配置文件展示渠道状态
+func showChannelStatusOffline(cfg *config.Config) error {
+	fmt.Println("\033[1m🦐 PP-Claw Channel Status\033[0m (gateway: \033[90m○\033[0m offline — showing config)")
+	fmt.Println()
+
+	enabledMap := cfg.Channels.GetEnabledMap()
+	names := make([]string, 0, len(enabledMap))
+	for name := range enabledMap {
+		names = append(names, name)
+	}
+	sortChannelNames(names)
+
+	fmt.Printf("  \033[1m%-20s %-12s %s\033[0m\n", "渠道", "状态", "账号")
+	fmt.Printf("  %s\n", strings.Repeat("─", 56))
+
+	for _, name := range names {
+		enabled := enabledMap[name]
+		if !enabled {
+			fmt.Printf("  %-20s \033[90m○ disabled\033[0m\n", name)
+			continue
+		}
+		accounts := cfg.Channels.AccountNamesForChannel(name)
+		accStr := strings.Join(accounts, ", ")
+		if accStr == "default" {
+			accStr = ""
+		}
+		fmt.Printf("  %-20s \033[33m● enabled\033[0m   %s\n", name, accStr)
+	}
+	return nil
+}
+
+// sortChannelNames 将渠道名排序：enabled 的在前，disabled 的在后，各自按字母序
+func sortChannelNames(names []string) {
+	sort.Strings(names)
 }
 
 func gatewayBaseURLFromConfig(cfg *config.Config) string {

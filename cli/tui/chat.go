@@ -30,8 +30,9 @@ type chatModel struct {
 	width         int
 	height        int
 	isSubmitting  bool
-	glamourParser *glamour.TermRenderer
-	modelName     string
+	glamourParser   *glamour.TermRenderer
+	modelName       string
+	channelsSummary string
 
 	// 工具追踪
 	activeTools map[string]*ToolBlock
@@ -96,7 +97,7 @@ func (m *chatModel) lastAssistantContent() string {
 	return ""
 }
 
-func initialModel(ctx context.Context, msgBus *bus.MessageBus, cancel func(), modelName string) *chatModel {
+func initialModel(ctx context.Context, msgBus *bus.MessageBus, cancel func(), modelName, channelsSummary string) *chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message..."
 	ta.Focus()
@@ -126,13 +127,14 @@ func initialModel(ctx context.Context, msgBus *bus.MessageBus, cancel func(), mo
 	sub, unsub := msgBus.SubscribeOutbound()
 
 	m := &chatModel{
-		ctx:           ctx,
-		cancel:        cancel,
-		msgBus:        msgBus,
-		textarea:      ta,
-		spinner:       sp,
-		viewport:      vp,
-		modelName:     modelName,
+		ctx:             ctx,
+		cancel:          cancel,
+		msgBus:          msgBus,
+		textarea:        ta,
+		spinner:         sp,
+		viewport:        vp,
+		modelName:       modelName,
+		channelsSummary: channelsSummary,
 		messages: []ChatMessage{
 			{Kind: MsgSystem, Content: "pp-claw ready! Type your message.", Timestamp: time.Now()},
 		},
@@ -311,7 +313,7 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		// 动态计算 viewport 在屏幕上的起始行
-		vpStart := lipgloss.Height(renderHeader(m.modelName, m.width))
+		vpStart := lipgloss.Height(renderHeader(m.modelName, m.channelsSummary, m.width))
 		vpEnd := vpStart + m.viewport.Height
 
 		switch {
@@ -516,7 +518,7 @@ func (m *chatModel) handleBusMessage(out *bus.OutboundMessage) {
 
 func (m *chatModel) View() string {
 	// Header
-	header := renderHeader(m.modelName, m.width)
+	header := renderHeader(m.modelName, m.channelsSummary, m.width)
 
 	// Viewport (chat messages)
 	vpView := m.viewport.View()
@@ -542,10 +544,11 @@ func (m *chatModel) View() string {
 }
 
 // RunChat 启动 CLI 聊天 (阻塞直到退出)
-func RunChat(ctx context.Context, msgBus *bus.MessageBus, cancel func(), modelName string) error {
+// channelsSummary 可选，如 "feishu(3) · wechat(1)"，为空则不显示
+func RunChat(ctx context.Context, msgBus *bus.MessageBus, cancel func(), modelName, channelsSummary string) error {
 	lipgloss.SetHasDarkBackground(true)
 
-	m := initialModel(ctx, msgBus, cancel, modelName)
+	m := initialModel(ctx, msgBus, cancel, modelName, channelsSummary)
 	defer m.unsubFunc()
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
