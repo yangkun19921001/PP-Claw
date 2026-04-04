@@ -210,7 +210,7 @@ func (f *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 			}
 		default:
 			// mention 模式：必须 @ 自己才处理
-			if !hasBotMention(rawContent, msg.Mentions) {
+			if !isSelfMentioned(f.botOpenID, msg.Mentions) {
 				return nil
 			}
 		}
