@@ -47,9 +47,9 @@ func renderStatusBar(width int, isSubmitting bool, scrollPct int, atBottom bool,
 	if copyFlash != "" {
 		left = lipgloss.NewStyle().Foreground(colorSuccess).Render(copyFlash)
 	} else if isSubmitting {
-		left = "⏎ interrupt  ^C quit  ^Y copy"
+		left = "ESC cancel  ^K model  ^C quit  ^Y copy"
 	} else {
-		left = "⏎ send  ⌥⏎ newline  ^C quit  ^Y copy"
+		left = "⏎ send  \\⏎/⇧⏎ newline  ESC clear  ^K model  ^C quit  ^Y copy"
 	}
 
 	// 右侧滚动指示
@@ -73,7 +73,7 @@ func renderStatusBar(width int, isSubmitting bool, scrollPct int, atBottom bool,
 func renderWelcome(width int) string {
 	logo := welcomeBrandStyle.Render("🦐 PP-Claw")
 	hint := welcomeHintStyle.Render("Type a message to get started")
-	keys := welcomeHintStyle.Render("⏎ send  ⌥⏎ newline  ^C quit")
+	keys := welcomeHintStyle.Render("⏎ send  \\⏎/⇧⏎ newline  ^C quit")
 
 	block := lipgloss.JoinVertical(lipgloss.Center, "", logo, "", hint, keys, "")
 	return lipgloss.Place(width, 0, lipgloss.Center, lipgloss.Center, block)

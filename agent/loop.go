@@ -123,11 +123,52 @@ func (l *AgentLoop) dispatch(ctx context.Context, agentID string, msg *bus.Inbou
 	// 连接 MCP（首次使用时懒连接）
 	env.ConnectMCP(msgCtx, l.cfg)
 
-	// Per-session 串行锁
+	// /stop 命令需要在获取 session 锁之前处理，否则会被当前运行中的请求阻塞
 	sessionKey := agentID + ":" + msg.SessionKey()
+	cmd := strings.TrimSpace(strings.ToLower(msg.Content))
+	if cmd == "/stop" {
+		cancelled := 0
+		if val, ok := env.ActiveTasks.Load(sessionKey); ok {
+			if cancels, ok := val.([]context.CancelFunc); ok {
+				for _, cancel := range cancels {
+					cancel()
+				}
+				cancelled += len(cancels)
+			}
+			env.ActiveTasks.Delete(sessionKey)
+		}
+		if env.Subagents != nil {
+			cancelled += env.Subagents.CancelBySession(sessionKey)
+		}
+		text := fmt.Sprintf("Cancelled %d task(s).", cancelled)
+		if cancelled == 0 {
+			text = "No active tasks to cancel."
+		}
+		resp := bus.NewOutboundMessage(msg.Channel, msg.ChatID, text)
+		resp.AccountID = msg.AccountID
+		l.bus.PublishOutbound(resp)
+		return
+	}
+
+	// Per-session 串行锁
 	mu := env.AcquireSession(sessionKey)
 	mu.Lock()
 	defer mu.Unlock()
+
+	// 创建可取消的子 context 并注册到 ActiveTasks，供 /stop 命令使用
+	msgCtx, msgCancel := context.WithCancel(msgCtx)
+	defer msgCancel()
+
+	// 注册 cancel func
+	if val, ok := env.ActiveTasks.Load(sessionKey); ok {
+		env.ActiveTasks.Store(sessionKey, append(val.([]context.CancelFunc), msgCancel))
+	} else {
+		env.ActiveTasks.Store(sessionKey, []context.CancelFunc{msgCancel})
+	}
+	defer func() {
+		// 任务完成后清理（简单起见直接删除，因为 per-session 串行锁保证同一时间只有一个任务）
+		env.ActiveTasks.Delete(sessionKey)
+	}()
 
 	response, err := processMessage(msgCtx, env, msg, sessionKey, l.bus, l.logger)
 	if err != nil {
@@ -621,12 +662,19 @@ func runWithADK(ctx context.Context, env *AgentEnv, messages []*schema.Message, 
 	toolStartTimes := make(map[string]time.Time)
 	toolNames := make(map[string]string)
 	toolArgs := make(map[string]string)
+	eventCount := 0
 
 	for {
 		event, ok := iter.Next()
 		if !ok {
+			logger.Info("ADK 迭代结束",
+				zap.String("trace_id", traceID),
+				zap.Int("total_events", eventCount),
+				zap.Int("last_content_length", len(lastContent)),
+			)
 			break
 		}
+		eventCount++
 		if event.Err != nil {
 			return "", "error", fmt.Errorf("agent error: %w", event.Err)
 		}
@@ -651,13 +699,19 @@ func runWithADK(ctx context.Context, env *AgentEnv, messages []*schema.Message, 
 			continue
 		}
 
-		logger.Debug("ADK event",
+		contentPreview := msg.Content
+		if len(contentPreview) > 200 {
+			contentPreview = contentPreview[:200] + "...(truncated)"
+		}
+		logger.Info("ADK event",
 			zap.String("trace_id", traceID),
 			zap.String("mv_role", string(role)),
 			zap.String("msg_role", string(msg.Role)),
 			zap.String("tool_call_id", msg.ToolCallID),
 			zap.String("tool_name", msg.ToolName),
 			zap.Int("tool_calls", len(msg.ToolCalls)),
+			zap.Int("content_length", len(msg.Content)),
+			zap.String("content_preview", contentPreview),
 		)
 
 		switch role {

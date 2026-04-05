@@ -529,7 +529,10 @@ func runAgent(message, sessionID string) error {
 	}()
 
 	// 启动 Bubble Tea TUI (阻塞直到退出)
-	if err := tui.RunChat(ctx, msgBus, cancel, cfg.Agents.Defaults.Model, ""); err != nil {
+	defaultAgentID := cfg.ResolveDefaultAgentID()
+	// 读取上次 TUI 中切换的模型（仅影响 header 显示和启动后的 SwitchModel）
+	activeModel := tui.LoadLastModel(cfg.Agents.Defaults.Model)
+	if err := tui.RunChat(ctx, msgBus, cancel, activeModel, "", pool, cfg, defaultAgentID); err != nil {
 		return fmt.Errorf("TUI runtime error: %w", err)
 	}
 

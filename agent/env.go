@@ -324,6 +324,39 @@ func (p *AgentEnvPool) Close() {
 	}
 }
 
+// SwitchModel 运行时切换指定 Agent 的模型，重建 ChatModel 和 ADK Runner。
+func (p *AgentEnvPool) SwitchModel(agentID, newModel string) error {
+	// 确保 agent 已初始化（懒创建）
+	env, err := p.GetOrCreate(agentID)
+	if err != nil {
+		return fmt.Errorf("初始化 agent %q 失败: %w", agentID, err)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// 创建新的 ChatModel
+	chatModel, err := providers.NewChatModel(p.logger, p.cfg, newModel)
+	if err != nil {
+		return fmt.Errorf("创建新 ChatModel 失败: %w", err)
+	}
+
+	// 替换 ChatModel 和 ModelName
+	env.ChatModel = chatModel
+	env.ModelName = newModel
+
+	// 重建 ADK Agent/Runner
+	if err := env.InitEinoADK(context.Background()); err != nil {
+		return fmt.Errorf("重建 ADK Runner 失败: %w", err)
+	}
+
+	p.logger.Info("Agent 模型已切换",
+		zap.String("agent_id", agentID),
+		zap.String("new_model", newModel),
+	)
+	return nil
+}
+
 // Delegate 同步委托任务给目标 Agent（in-process 调用，不经过 MessageBus）。
 // 通过 context 传递递归深度计数器，超过 maxDelegationDepth 时返回错误。
 func (p *AgentEnvPool) Delegate(ctx context.Context, targetAgentID, task string) (string, error) {

@@ -3,7 +3,11 @@ package tui
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -15,8 +19,34 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/yangkun19921001/PP-Claw/agent"
 	"github.com/yangkun19921001/PP-Claw/bus"
+	"github.com/yangkun19921001/PP-Claw/config"
 )
+
+// lastModelPath 返回持久化模型选择的文件路径
+func lastModelPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".pp-claw", ".last_model")
+}
+
+// LoadLastModel 读取上次选择的模型，为空则返回 fallback
+func LoadLastModel(fallback string) string {
+	data, err := os.ReadFile(lastModelPath())
+	if err != nil {
+		return fallback
+	}
+	model := strings.TrimSpace(string(data))
+	if model == "" {
+		return fallback
+	}
+	return model
+}
+
+// saveLastModel 持久化模型选择
+func saveLastModel(model string) {
+	_ = os.WriteFile(lastModelPath(), []byte(model), 0644)
+}
 
 type chatModel struct {
 	ctx           context.Context
@@ -54,6 +84,13 @@ type chatModel struct {
 	// 接收通道
 	subChan   <-chan *bus.OutboundMessage
 	unsubFunc func()
+
+	// 模型切换
+	pool            *agent.AgentEnvPool
+	cfg             *config.Config
+	agentID         string
+	showModelPicker bool
+	modelPicker     modelPickerModel
 }
 
 // 消息包装：用于在 Update 循环中传递从 msgBus 接收的数据
@@ -97,7 +134,7 @@ func (m *chatModel) lastAssistantContent() string {
 	return ""
 }
 
-func initialModel(ctx context.Context, msgBus *bus.MessageBus, cancel func(), modelName, channelsSummary string) *chatModel {
+func initialModel(ctx context.Context, msgBus *bus.MessageBus, cancel func(), modelName, channelsSummary string, pool *agent.AgentEnvPool, cfg *config.Config, agentID string) *chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message..."
 	ta.Focus()
@@ -106,7 +143,7 @@ func initialModel(ctx context.Context, msgBus *bus.MessageBus, cancel func(), mo
 	ta.CharLimit = 0
 	ta.SetWidth(78)
 	ta.SetHeight(3)
-	ta.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
+	ta.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j", "shift+enter")
 	// 去掉输入框的背景色
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(colorDim)
@@ -143,6 +180,9 @@ func initialModel(ctx context.Context, msgBus *bus.MessageBus, cancel func(), mo
 		streamingMsgIdx: -1,
 		subChan:         sub,
 		unsubFunc:       unsub,
+		pool:            pool,
+		cfg:             cfg,
+		agentID:         agentID,
 	}
 
 	// 初始化 lastContent，确保鼠标选区在 WindowSizeMsg 之前也有内容可用
@@ -151,12 +191,34 @@ func initialModel(ctx context.Context, msgBus *bus.MessageBus, cancel func(), mo
 	return m
 }
 
+// modelRestoredMsg 启动时恢复上次模型的结果
+type modelRestoredMsg struct {
+	model string
+	err   error
+}
+
 func (m *chatModel) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		textarea.Blink,
 		m.waitForMessage(),
 		m.spinner.Tick,
-	)
+	}
+
+	// 如果持久化的模型和 agent 配置的不同，启动后异步切换
+	if m.pool != nil && m.cfg != nil {
+		agentDefaults := m.cfg.ResolveAgentDefaults(m.agentID)
+		if m.modelName != agentDefaults.Model {
+			targetModel := m.modelName
+			pool := m.pool
+			agentID := m.agentID
+			cmds = append(cmds, func() tea.Msg {
+				err := pool.SwitchModel(agentID, targetModel)
+				return modelRestoredMsg{model: targetModel, err: err}
+			})
+		}
+	}
+
+	return tea.Batch(cmds...)
 }
 
 // 持续监听来自核心逻辑的输出消息（循环代替递归，避免栈溢出）
@@ -207,6 +269,46 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		spCmd tea.Cmd
 		cmds  []tea.Cmd
 	)
+
+	// 模型选择器打开时，拦截所有消息路由到 picker
+	if m.showModelPicker {
+		switch msg := msg.(type) {
+		case tea.WindowSizeMsg:
+			m.width = msg.Width
+			m.height = msg.Height
+			m.modelPicker.width = msg.Width
+			m.modelPicker.height = msg.Height
+		case tea.KeyMsg:
+			cmd := m.modelPicker.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		case modelSelectedMsg:
+			m.showModelPicker = false
+			if m.pool != nil && msg.model != m.modelName {
+				if err := m.pool.SwitchModel(m.agentID, msg.model); err != nil {
+					m.messages = append(m.messages, ChatMessage{
+						Kind: MsgSystem, Content: fmt.Sprintf("Switch model failed: %s", err),
+						Timestamp: time.Now(),
+					})
+				} else {
+					m.modelName = msg.model
+					saveLastModel(msg.model)
+					m.messages = append(m.messages, ChatMessage{
+						Kind: MsgSystem, Content: fmt.Sprintf("Model switched to %s", msg.model),
+						Timestamp: time.Now(),
+					})
+				}
+				m.refreshViewport()
+			}
+		case modelPickerDismissedMsg:
+			m.showModelPicker = false
+		}
+		// spinner 仍需更新动画
+		m.spinner, spCmd = m.spinner.Update(msg)
+		cmds = append(cmds, spCmd)
+		return m, tea.Batch(cmds...)
+	}
 
 	// 记录滚动前的位置
 	wasAtBottom := m.viewport.AtBottom()
@@ -261,14 +363,47 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 		m.refreshViewport()
 
+	case modelRestoredMsg:
+		if msg.err != nil {
+			// 恢复失败，回退到 agent 配置的默认模型
+			if m.cfg != nil {
+				agentDefaults := m.cfg.ResolveAgentDefaults(m.agentID)
+				m.modelName = agentDefaults.Model
+			}
+		}
+
 	case clearCopyFlashMsg:
 		m.copyFlash = ""
 
 	case tea.KeyMsg:
 		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
+		case tea.KeyCtrlC:
 			m.cancel()
 			return m, tea.Quit
+
+		case tea.KeyEsc:
+			if m.isSubmitting {
+				// 发送 /stop 取消当前请求，不退出程序
+				stop := bus.NewInboundMessage("cli", "user", "direct", "/stop")
+				m.msgBus.PublishInbound(stop)
+				m.isSubmitting = false
+				m.activeTools = make(map[string]*ToolBlock)
+				m.streamingMsgIdx = -1
+				m.refreshViewport()
+			} else {
+				// 空闲时清空输入框
+				m.textarea.Reset()
+			}
+
+		case tea.KeyCtrlK:
+			// 打开模型选择器（仅在非提交状态时）
+			if !m.isSubmitting && m.cfg != nil {
+				models := m.cfg.ConfiguredModels()
+				if len(models) > 0 {
+					m.modelPicker = newModelPicker(models, m.modelName, m.width, m.height)
+					m.showModelPicker = true
+				}
+			}
 
 		case tea.KeyCtrlY:
 			// 复制最后一条 assistant 消息到剪贴板
@@ -287,7 +422,15 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}))
 
 		case tea.KeyEnter:
-			v := strings.TrimSpace(m.textarea.Value())
+			// 反斜杠+Enter 通用换行（所有终端兼容）
+			raw := m.textarea.Value()
+			if strings.HasSuffix(raw, "\\") {
+				m.textarea.SetValue(raw[:len(raw)-1] + "\n")
+				m.textarea.CursorEnd()
+				break
+			}
+
+			v := strings.TrimSpace(raw)
 			if v == "" {
 				m.textarea.Reset()
 				break
@@ -540,15 +683,27 @@ func (m *chatModel) View() string {
 	scrollPct := int(m.viewport.ScrollPercent() * 100)
 	statusBar := renderStatusBar(m.width, m.isSubmitting, scrollPct, m.viewport.AtBottom(), m.copyFlash)
 
-	return fmt.Sprintf("%s\n%s\n%s\n%s", header, vpView, inputView, statusBar)
+	base := fmt.Sprintf("%s\n%s\n%s\n%s", header, vpView, inputView, statusBar)
+
+	// 模型选择器浮层覆盖
+	if m.showModelPicker {
+		return m.modelPicker.View()
+	}
+
+	return base
 }
 
 // RunChat 启动 CLI 聊天 (阻塞直到退出)
 // channelsSummary 可选，如 "feishu(3) · wechat(1)"，为空则不显示
-func RunChat(ctx context.Context, msgBus *bus.MessageBus, cancel func(), modelName, channelsSummary string) error {
+func RunChat(ctx context.Context, msgBus *bus.MessageBus, cancel func(), modelName, channelsSummary string, pool *agent.AgentEnvPool, cfg *config.Config, agentID string) error {
 	lipgloss.SetHasDarkBackground(true)
 
-	m := initialModel(ctx, msgBus, cancel, modelName, channelsSummary)
+	// 抑制第三方库（如 eino）通过标准 log 包输出的警告，防止破坏 TUI 渲染
+	origWriter := log.Writer()
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(origWriter)
+
+	m := initialModel(ctx, msgBus, cancel, modelName, channelsSummary, pool, cfg, agentID)
 	defer m.unsubFunc()
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())

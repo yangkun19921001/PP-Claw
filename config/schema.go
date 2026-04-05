@@ -553,3 +553,56 @@ func (c *Config) providerMap() map[string]*ProviderConfig {
 		"github_copilot": &c.Providers.GithubCopilot,
 	}
 }
+
+// ModelOption 表示一个可用的模型选项
+type ModelOption struct {
+	Provider string
+	Model    string
+}
+
+// ConfiguredModels 返回所有已配置的 provider+model 列表
+func (c *Config) ConfiguredModels() []ModelOption {
+	seen := map[string]bool{}
+	var models []ModelOption
+
+	add := func(provider, model string) {
+		if model == "" {
+			return
+		}
+		key := provider + "/" + model
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		models = append(models, ModelOption{Provider: provider, Model: model})
+	}
+
+	// 添加默认模型
+	if c.Agents.Defaults.Model != "" {
+		// 尝试找到对应的 provider
+		providerName := ""
+		for name, pc := range c.providerMap() {
+			if pc.Model == c.Agents.Defaults.Model {
+				providerName = name
+				break
+			}
+		}
+		add(providerName, c.Agents.Defaults.Model)
+	}
+
+	// 遍历所有 provider，收集有 API Key 且有 Model 的
+	for name, pc := range c.providerMap() {
+		if pc.APIKey != "" && pc.Model != "" {
+			add(name, pc.Model)
+		}
+	}
+
+	// 遍历 per-agent 配置
+	for _, entry := range c.Agents.List {
+		if entry.Model != "" {
+			add("", entry.Model)
+		}
+	}
+
+	return models
+}

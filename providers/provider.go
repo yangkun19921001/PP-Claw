@@ -89,19 +89,19 @@ func NewChatModel(logger *zap.Logger, cfg *config.Config, modelOverride string) 
 
 	switch providerName {
 	case "anthropic":
-		chatModel, err = newClaudeChatModel(actualModel, apiBase, provider, cfg, headers)
+		chatModel, err = newClaudeChatModel(actualModel, apiBase, provider, cfg, headers, logger)
 	case "gemini":
-		chatModel, err = newGeminiChatModel(actualModel, apiBase, provider, cfg, headers)
+		chatModel, err = newGeminiChatModel(actualModel, apiBase, provider, cfg, headers, logger)
 	case "volcengine":
-		chatModel, err = newArkChatModel(actualModel, apiBase, provider, cfg, headers)
+		chatModel, err = newArkChatModel(actualModel, apiBase, provider, cfg, headers, logger)
 	case "deepseek":
-		chatModel, err = newDeepSeekChatModel(actualModel, apiBase, provider, cfg, headers)
+		chatModel, err = newDeepSeekChatModel(actualModel, apiBase, provider, cfg, headers, logger)
 	case "dashscope":
-		chatModel, err = newQwenChatModel(actualModel, apiBase, provider, cfg, headers)
+		chatModel, err = newQwenChatModel(actualModel, apiBase, provider, cfg, headers, logger)
 	case "ollama":
-		chatModel, err = newOllamaChatModel(actualModel, apiBase, provider, cfg, headers)
+		chatModel, err = newOllamaChatModel(actualModel, apiBase, provider, cfg, headers, logger)
 	default:
-		chatModel, err = newOpenAICompatibleChatModel(actualModel, apiBase, providerName, provider, cfg, headers)
+		chatModel, err = newOpenAICompatibleChatModel(actualModel, apiBase, providerName, provider, cfg, headers, logger)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("创建 provider=%s model=%s 失败: %w", providerName, actualModel, err)
@@ -116,23 +116,23 @@ func NewChatModel(logger *zap.Logger, cfg *config.Config, modelOverride string) 
 	return chatModel, nil
 }
 
-func newOpenAICompatibleChatModel(actualModel, apiBase, providerName string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+func newOpenAICompatibleChatModel(actualModel, apiBase, providerName string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string, logger *zap.Logger) (model.ToolCallingChatModel, error) {
 	chatModelCfg := &einoopenai.ChatModelConfig{
 		APIKey:  provider.APIKey,
 		Model:   actualModel,
 		BaseURL: apiBase,
 	}
 	applyCommonParamsToOpenAI(chatModelCfg, cfg)
-	chatModelCfg.HTTPClient = buildHTTPClient(headers)
+	chatModelCfg.HTTPClient = buildHTTPClientWithLogger(headers, logger)
 	return einoopenai.NewChatModel(context.Background(), chatModelCfg)
 }
 
-func newClaudeChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+func newClaudeChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string, logger *zap.Logger) (model.ToolCallingChatModel, error) {
 	chatCfg := &einoclaude.Config{
 		APIKey:     provider.APIKey,
 		Model:      actualModel,
 		MaxTokens:  max(cfg.Agents.Defaults.MaxTokens, 1),
-		HTTPClient: buildHTTPClient(headers),
+		HTTPClient: buildHTTPClientWithLogger(headers, logger),
 	}
 	if apiBase != "" {
 		chatCfg.BaseURL = &apiBase
@@ -144,7 +144,7 @@ func newClaudeChatModel(actualModel, apiBase string, provider *config.ProviderCo
 	return einoclaude.NewChatModel(context.Background(), chatCfg)
 }
 
-func newGeminiChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+func newGeminiChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string, _ *zap.Logger) (model.ToolCallingChatModel, error) {
 	clientCfg := &genai.ClientConfig{
 		APIKey:  provider.APIKey,
 		Backend: genai.BackendGeminiAPI,
@@ -179,12 +179,12 @@ func newGeminiChatModel(actualModel, apiBase string, provider *config.ProviderCo
 	return einogemini.NewChatModel(context.Background(), chatCfg)
 }
 
-func newArkChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+func newArkChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string, logger *zap.Logger) (model.ToolCallingChatModel, error) {
 	chatCfg := &einoark.ChatModelConfig{
 		APIKey:       provider.APIKey,
 		BaseURL:      apiBase,
 		Model:        actualModel,
-		HTTPClient:   buildHTTPClient(headers),
+		HTTPClient:   buildHTTPClientWithLogger(headers, logger),
 		CustomHeader: cloneStringMap(headers),
 	}
 	if cfg.Agents.Defaults.MaxTokens > 0 {
@@ -198,12 +198,12 @@ func newArkChatModel(actualModel, apiBase string, provider *config.ProviderConfi
 	return einoark.NewChatModel(context.Background(), chatCfg)
 }
 
-func newDeepSeekChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+func newDeepSeekChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string, logger *zap.Logger) (model.ToolCallingChatModel, error) {
 	chatCfg := &einodeepseek.ChatModelConfig{
 		APIKey:     provider.APIKey,
 		BaseURL:    apiBase,
 		Model:      actualModel,
-		HTTPClient: buildHTTPClient(headers),
+		HTTPClient: buildHTTPClientWithLogger(headers, logger),
 	}
 	if cfg.Agents.Defaults.MaxTokens > 0 {
 		chatCfg.MaxTokens = cfg.Agents.Defaults.MaxTokens
@@ -214,12 +214,12 @@ func newDeepSeekChatModel(actualModel, apiBase string, provider *config.Provider
 	return einodeepseek.NewChatModel(context.Background(), chatCfg)
 }
 
-func newQwenChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+func newQwenChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string, logger *zap.Logger) (model.ToolCallingChatModel, error) {
 	chatCfg := &einoqwen.ChatModelConfig{
 		APIKey:     provider.APIKey,
 		BaseURL:    apiBase,
 		Model:      actualModel,
-		HTTPClient: buildHTTPClient(headers),
+		HTTPClient: buildHTTPClientWithLogger(headers, logger),
 	}
 	if cfg.Agents.Defaults.MaxTokens > 0 {
 		maxTokens := cfg.Agents.Defaults.MaxTokens
@@ -232,11 +232,11 @@ func newQwenChatModel(actualModel, apiBase string, provider *config.ProviderConf
 	return einoqwen.NewChatModel(context.Background(), chatCfg)
 }
 
-func newOllamaChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string) (model.ToolCallingChatModel, error) {
+func newOllamaChatModel(actualModel, apiBase string, provider *config.ProviderConfig, cfg *config.Config, headers map[string]string, logger *zap.Logger) (model.ToolCallingChatModel, error) {
 	chatCfg := &einoollama.ChatModelConfig{
 		BaseURL:    apiBase,
 		Model:      actualModel,
-		HTTPClient: buildHTTPClient(headers),
+		HTTPClient: buildHTTPClientWithLogger(headers, logger),
 		Timeout:    5 * time.Minute,
 	}
 	// Ollama 通过 Options 传递 Temperature 和 NumPredict(MaxTokens)
@@ -286,6 +286,9 @@ func resolveActualModel(modelName, providerName string, provider *config.Provide
 
 func buildProviderHeaders(providerName string, provider *config.ProviderConfig) map[string]string {
 	headers := cloneStringMap(provider.ExtraHeaders)
+	if headers == nil {
+		headers = make(map[string]string)
+	}
 
 	spec := FindByName(providerName)
 	if spec != nil && spec.SupportsPromptCache && providerName == "anthropic" {
@@ -295,6 +298,10 @@ func buildProviderHeaders(providerName string, provider *config.ProviderConfig) 
 }
 
 func buildHTTPClient(headers map[string]string) *http.Client {
+	return buildHTTPClientWithLogger(headers, nil)
+}
+
+func buildHTTPClientWithLogger(headers map[string]string, logger *zap.Logger) *http.Client {
 	// Clone default transport, add response header timeout
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
@@ -316,6 +323,11 @@ func buildHTTPClient(headers map[string]string) *http.Client {
 			base:    rt,
 			headers: headers,
 		}
+	}
+
+	// Wrap with debug logging
+	if logger != nil {
+		rt = &loggingRoundTripper{base: rt, logger: logger}
 	}
 
 	return &http.Client{Transport: rt}
@@ -414,4 +426,120 @@ func (t *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		return lastResp, nil // return final 5xx response
 	}
 	return nil, lastErr // return final network error
+}
+
+// loggingRoundTripper 记录 LLM HTTP 请求/响应摘要，用于调试。
+// 对 SSE 流式响应使用 tee reader 捕获前 N 字节，不破坏 streaming。
+type loggingRoundTripper struct {
+	base   http.RoundTripper
+	logger *zap.Logger
+}
+
+func (t *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	start := time.Now()
+
+	// 记录请求摘要
+	t.logger.Debug("LLM HTTP 请求",
+		zap.String("method", req.Method),
+		zap.String("url", req.URL.String()),
+		zap.Int64("content_length", req.ContentLength),
+	)
+
+	resp, err := t.base.RoundTrip(req)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.logger.Warn("LLM HTTP 错误",
+			zap.String("url", req.URL.String()),
+			zap.Duration("elapsed", elapsed),
+			zap.Error(err),
+		)
+		return nil, err
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	isStream := strings.Contains(ct, "text/event-stream") || strings.Contains(ct, "stream")
+
+	t.logger.Info("LLM HTTP 响应头",
+		zap.String("url", req.URL.String()),
+		zap.Int("status", resp.StatusCode),
+		zap.Duration("elapsed", elapsed),
+		zap.String("content_type", ct),
+		zap.Bool("is_stream", isStream),
+	)
+
+	if isStream {
+		// 流式响应：用 loggingBody 包装，在读取过程中捕获前 N 字节
+		resp.Body = &loggingBody{
+			inner:  resp.Body,
+			logger: t.logger,
+			url:    req.URL.String(),
+			start:  start,
+			maxCap: 1024,
+		}
+	} else {
+		// 非流式响应：读取并记录完整 body
+		respBody, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			t.logger.Warn("LLM HTTP 响应体读取失败",
+				zap.String("url", req.URL.String()),
+				zap.Int("status", resp.StatusCode),
+				zap.Error(readErr),
+			)
+			return nil, readErr
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+
+		preview := string(respBody)
+		if len(preview) > 500 {
+			preview = preview[:500] + "...(truncated)"
+		}
+		t.logger.Info("LLM HTTP 响应体",
+			zap.String("url", req.URL.String()),
+			zap.Int("status", resp.StatusCode),
+			zap.Int("body_size", len(respBody)),
+			zap.String("body_preview", preview),
+		)
+	}
+
+	return resp, nil
+}
+
+// loggingBody 包装 ReadCloser，在读取过程中捕获前 maxCap 字节，Close 时输出日志。
+type loggingBody struct {
+	inner  io.ReadCloser
+	logger *zap.Logger
+	url    string
+	start  time.Time
+	maxCap int
+	buf    []byte
+	total  int
+}
+
+func (b *loggingBody) Read(p []byte) (int, error) {
+	n, err := b.inner.Read(p)
+	b.total += n
+	if remaining := b.maxCap - len(b.buf); remaining > 0 && n > 0 {
+		if n < remaining {
+			remaining = n
+		}
+		b.buf = append(b.buf, p[:remaining]...)
+	}
+	return n, err
+}
+
+func (b *loggingBody) Close() error {
+	err := b.inner.Close()
+	preview := string(b.buf)
+	if len(preview) > 500 {
+		preview = preview[:500] + "...(truncated)"
+	}
+	b.logger.Info("LLM HTTP 流结束",
+		zap.String("url", b.url),
+		zap.Int("total_bytes", b.total),
+		zap.Duration("stream_duration", time.Since(b.start)),
+		zap.String("stream_preview", preview),
+	)
+	return err
 }
