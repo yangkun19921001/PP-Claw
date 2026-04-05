@@ -1,160 +1,171 @@
-# 皮皮虾支持多 Agent 了，可以创建你的军团了
+# 别让一个 Agent 干所有事：聊聊我们的多 Agent 架构设计
 
-> 一个飞书应用对应一个 Agent，一个 Agent 有独立的大脑、记忆和工具箱。你可以让老板的助手帮他盯群消息，让员工的助手只在被 @ 时回复，让翻译助手专注特定群聊——它们共享同一个进程，却彼此互不干扰。
+> ![Gemini_Generated_Image_dgkboidgkboidgkb](http://devyk.top/2022/202604041605065.png)
+>
+> 皮皮虾的多 Agent 就是这套分工的设计版，一个进程是项目组，每个 Agent 是其中一个角色，有自己独立的记忆、工具链和行为策略，但共享同一个消息总线和网络连接。
 
-## 起因：一个进程跑多个 "人格"
+## 单 Agent 到底有什么问题？
 
-最初做皮皮虾（PP-Claw）的时候，架构很简单——一个 Agent 服务所有渠道。飞书来了消息，微信来了消息，全都塞给同一个大脑处理。模型、记忆、工具，全局共享。
+先说说为什么要折腾多 Agent。
 
-这在单人使用时没问题。但当我把它丢给团队用的时候，问题就来了：
+皮皮虾最早就一个 Agent。飞书消息来了、微信消息来了，全塞给同一个"大脑"处理。模型、记忆、工具、行为策略，全局共享，只有一份。
 
-- 老板希望机器人在群里"有问必答"，不用 @ 也能回
-- 普通员工希望机器人安静点，@了才说话
-- 我自己想要一个带完整工具链的私人助手，有自己的记忆空间
+这就好比整个研发团队只有一个人，什么都干, 前端后端测试运维全是他。活少的时候还行，一忙起来就崩了，而且没法按角色定制行为。
 
-如果只有一个 Agent，那 `group_policy` 只能设一个值。要么全 open，要么全 mention。想要不同的行为？对不起，做不到。
+具体遇到了这些痛点：
 
-小龙虾（OpenClaw）用 43 万行 TypeScript 实现了完整的多 Agent 协作——Controller + Plugin Runtime + WS RPC，架构很强，但太重了。我需要的是一个轻量方案：**声明式配置、运行时隔离、零代码添加新 Agent**。
+**1. 行为策略没法按场景拆分**
 
-于是就有了皮皮虾的多 Agent 架构。
+研发经理希望机器人在群里"有问必答"，群里任何消息都回复（`group_policy: open`），好随时掌握项目动态、回答产品经理的问题。但前端开发觉得太吵了，希望 @ 了才回（`group_policy: mention`），专心写 TUI 布局的时候别打扰。一个 Agent 只能设一个策略，要么全 open 要么全 mention，没法两头兼顾。
+
+这就像研发经理说"产品经理的消息都要立刻响应"，但前端说"别找我，排期了再说"。一个人没法同时执行两套规则。
+
+**2. 记忆和上下文互相污染**
+
+研发经理问机器人"上次说的那个需求进展如何？"，结果机器人把它跟前端开发聊的飞书卡片适配的事搞混了，因为所有人的对话历史和记忆都存在同一个地方。
+
+类比一下：前端和后端共用一个笔记本记东西，前端写的"TUI 布局要改"和后端写的"消息路由逻辑要改"混在一起，翻的时候根本分不清谁说的哪件事。
+
+**3. 模型和工具没法差异化配置**
+
+研发经理需要高精度的大模型来统筹需求、审查代码，前端开发日常问答用小模型就够了。后端 Agent 需要 shell 执行权限来跑测试和部署脚本，前端 Agent 只需要搜索文档和回复消息。一个 Agent，一套配置，改不了。
+
+就像让前端开发和后端开发共用一台电脑、一套开发环境，前端要 Chrome DevTools 和 Figma，后端要 VSCode 和终端，装在一起谁也用不好。
+
+**4. 没法水平扩展角色**
+
+想加一个"文档助手"专门服务产品经理查 PRD？想加一个"值班机器人"只在周末响应线上告警？单 Agent 架构下，每加一个角色就意味着在同一个大脑里塞更多互相冲突的逻辑。
+
+这不是加人的问题，这是一个人要分裂成好几个人格的问题。
+
+## 多 Agent 解决了什么？
+
+![Gemini_Generated_Image_sb2t67sb2t67sb2t](http://devyk.top/2022/202604041610799.png)
+
+多 Agent 不是什么高深的技术概念，就是**让对的人干对的事**。
+
+回到研发团队的类比：
+
+| 单 Agent（一人包办）       | 多 Agent（专业分工）                                         |
+| -------------------------- | ------------------------------------------------------------ |
+| 一套行为策略，所有场景共用 | 研发经理 open 模式随时响应产品经理，前端 mention 模式专心写 TUI |
+| 一份记忆，所有对话混在一起 | 每人一个工位一个笔记本，互不干扰                             |
+| 一套工具，所有角色共享     | 后端有终端和 shell 执行权限，前端只有搜索和回复              |
+| 加角色就是加复杂度         | 加角色就是加一个工位，配好桌椅就行                           |
+
+具体到皮皮虾，多 Agent 意味着：
+
+- **行为隔离**：研发经理 Agent 群聊全放行，前端 Agent @ 才回，互不干扰
+- **记忆隔离**：每个 Agent 有独立的对话历史和长期记忆，不会串台
+- **配置隔离**：每个 Agent 可以用不同的模型、不同的工具迭代次数、不同的 workspace
+- **运行时隔离**：但它们跑在同一个进程里，共享网络连接和消息总线，资源开销很小
+
+而且，加一个新 Agent 只需要在 YAML 里加几行配置，不用写一行代码。就像团队招了个新人，给他配个工位、分配好职责就完事了。
 
 ## 整体架构
 
-先看全貌。皮皮虾的多 Agent 不是"多个进程"，而是**一个进程内的多个隔离环境**。每个 Agent 有自己的 workspace、模型、记忆、会话历史，但共享同一个消息总线和渠道连接。
+先看全貌。皮皮虾的多 Agent 不是"多个进程"，而是**一个进程内的多个隔离环境**。每个 Agent 有自己的 workspace、模型配置、记忆和会话历史，但共享同一个消息总线和渠道连接。
 
-```mermaid
-graph TB
-    subgraph Channels["渠道层"]
-        F1["feishu:boss<br/>老板应用"]
-        F2["feishu:employee<br/>员工应用"]
-        F3["feishu:make<br/>马克应用"]
-        WX["wechat:wx1"]
-    end
+![Gemini_Generated_Image_d31x2jd31x2jd31x](http://devyk.top/2022/202604041614780.png)
 
-    subgraph Bus["消息总线"]
-        IB["Inbound Channel<br/>(单消费者)"]
-        OB["Outbound Fan-out<br/>(多订阅者)"]
-    end
+消息进来后先入队到消息总线，路由层根据 channel、accountID、chatID、senderID 决定分给哪个 Agent 处理。处理完了，回复再通过消息总线出站分发回对应的渠道。
 
-    subgraph Router["路由层"]
-        AR["AgentRouter<br/>4 层优先级匹配"]
-    end
-
-    subgraph Pool["Agent 环境池"]
-        E1["AgentEnv: boss<br/>workspace-boss/<br/>Claude Opus"]
-        E2["AgentEnv: employee<br/>workspace-employee/<br/>Claude Opus"]
-        E3["AgentEnv: make<br/>workspace/<br/>Claude Opus"]
-    end
-
-    F1 -->|"AccountID=boss"| IB
-    F2 -->|"AccountID=employee"| IB
-    F3 -->|"AccountID=make"| IB
-    WX -->|"AccountID=wx1"| IB
-
-    IB --> AR
-    AR -->|"binding 匹配"| E1
-    AR -->|"binding 匹配"| E2
-    AR -->|"binding 匹配"| E3
-
-    E1 -->|"回复"| OB
-    E2 -->|"回复"| OB
-    E3 -->|"回复"| OB
-
-    OB -->|"channel:accountID 路由"| F1
-    OB -->|"channel:accountID 路由"| F2
-    OB -->|"channel:accountID 路由"| F3
-    OB -->|"内部多账号路由"| WX
-```
-
-## 核心设计：四层路由
+## 核心设计：四层路由, 需求分配给谁？
 
 消息进来后第一件事不是处理，是决定**谁来处理**。
 
-皮皮虾用了一个 4 层优先级的路由器，配置在 YAML 的 `bindings` 里，从上往下匹配，第一个命中的胜出：
+这跟实际项目组里分需求一模一样。就拿 PP-Claw 自己的研发团队举例。产品经理负责收集用户反馈、写 PRD，研发经理统筹进度，前端开发写 TUI 界面和飞书卡片交互，后端开发搞 Agent 框架和消息路由。飞书上有几个群：「产品需求群」聊需求和排期，「线上 Bug 群」处理用户反馈的问题，「前端评审群」过页面交互和样式。每天消息满天飞，问题是：这条消息该谁来处理？
 
-```mermaid
-flowchart TD
-    MSG["入站消息<br/>channel + accountID + chatID + senderID"] --> T1
+皮皮虾的路由器就干这件事，4 层优先级，从上往下匹配，第一个命中的胜出：
 
-    T1{"Tier 1: SenderIDs<br/>发送者精确匹配?"}
-    T1 -->|命中| HIT1["返回该 binding 的 AgentID"]
-    T1 -->|未命中| T2
+![mermaid-diagram-2026-04-04-161704](http://devyk.top/2022/202604041617647.png)
 
-    T2{"Tier 2: ChatIDs<br/>会话 ID 匹配?<br/>(channel 须一致)"}
-    T2 -->|命中| HIT2["返回该 binding 的 AgentID"]
-    T2 -->|未命中| T3
 
-    T3{"Tier 3: Channel + AccountID<br/>渠道 + 账号匹配?"}
-    T3 -->|命中| HIT3["返回该 binding 的 AgentID"]
-    T3 -->|未命中| T4
 
-    T4{"Tier 4: Default<br/>兜底 binding?"}
-    T4 -->|命中| HIT4["返回该 binding 的 AgentID"]
-    T4 -->|未命中| FB["Fallback: defaultAgentID"]
-```
+拿 PP-Claw 的研发团队走一遍，你就明白每一层在干什么了：
 
-对应的配置长这样：
+**第 1 层：按人路由, 产品经理说话，研发经理必须亲自接**
+
+产品经理偶尔会在不同的群里扔一句"多 Agent 路由这个功能下周能上吗？"或者"飞书消息丢失率最近怎么样？"。不管是在「线上 Bug 群」发的还是「前端评审群」发的，这种来自需求方的消息不能让普通开发去回，必须研发经理亲自处理，因为他掌握全局进度，知道该怎么答。
+
+所以第 1 层的规则是：只要消息发送者是产品经理，不管在哪个群，统一路由到研发经理 Agent。
+
+**第 2 层：按群路由, 线上 Bug 群的问题，后端来接**
+
+有用户在「线上 Bug 群」反馈"消息路由到错误的 Agent 了"，这个群聊的都是后端逻辑的事，不管是产品运营还是测试提的，都应该交给后端 Agent 处理。
+
+同样，「前端评审群」里的消息不管谁发的，都归前端 Agent 处理，聊的是 TUI 布局、飞书卡片样式这些事。一个群对应一个职责域。
+
+**第 3 层：按应用入口路由, 从哪个飞书应用进来的，就归谁**
+
+团队给研发经理、前端、后端各建了一个飞书机器人应用。从"前端机器人"进来的消息归前端 Agent，从"后端机器人"进来的归后端 Agent。这是最常见的路由方式，一个飞书应用对应一个 Agent。
+
+**第 4 层：兜底, 都匹配不上？研发经理兜着**
+
+总有些消息不属于任何明确分类，比如新来的实习生在某个没配路由的群里问了个问题，或者其他部门的人跑过来问"你们这个消息总线谁负责的？"。这种归属不清楚的事，现实中就是研发经理来接，先搞清楚什么情况，再分配给具体的人。
+
+所以兜底 Agent 设为研发经理，别让消息石沉大海。
+
+对应的 YAML 配置：
 
 ```yaml
 agents:
     bindings:
-        # Tier 1: 特定用户 → 代码审查 Agent
-        - agent_id: code-review
-          sender_ids: ["user_dev_001"]
+        # 第1层: 产品经理不管在哪个群发消息，研发经理亲自接
+        - agent_id: dev-manager
+          sender_ids: ["user_pm_001"]
 
-        # Tier 2: 特定群聊 → 翻译 Agent
-        - agent_id: translator
+        # 第2层: 线上Bug群 → 后端；前端评审群 → 前端
+        - agent_id: backend
           channel: feishu
-          chat_ids: ["oc_translation_group"]
+          chat_ids: ["oc_bug_report_group"]
 
-        # Tier 3: 飞书老板账号 → 老板 Agent
-        - agent_id: boss
+        - agent_id: frontend
           channel: feishu
-          account_id: boss
+          chat_ids: ["oc_frontend_review_group"]
 
-        # Tier 3: 飞书员工账号 → 员工 Agent
-        - agent_id: employee
+        # 第3层: 按飞书应用入口分
+        - agent_id: dev-manager
           channel: feishu
-          account_id: employee
+          account_id: dev-manager
 
-        # Tier 4: 兜底
-        - agent_id: make
+        - agent_id: frontend
+          channel: feishu
+          account_id: frontend
+
+        # 第4层: 归属不明的消息，研发经理兜底
+        - agent_id: dev-manager
           default: true
 ```
 
-为什么要 4 层？因为实际场景中，你可能需要"**张三不管在哪个群发消息，都交给专属 Agent 处理**"（Tier 1），也可能需要"**翻译群的所有消息都交给翻译 Agent**"（Tier 2），还可能需要"**老板应用的所有消息走老板 Agent**"（Tier 3）。这些需求可以共存，优先级自然不同。
+为什么要 4 层？因为实际项目里这些需求是同时存在的：
 
-路由器的代码实现很朴素——对同一个 bindings 数组扫 4 遍，每遍只看对应层级的条件。bindings 数量通常个位数，O(4n) 无所谓。
+- 产品经理的消息比群归属更重要，他是需求源头，必须优先按人匹配
+- 「线上 Bug 群」里产品、运营、测试都有人，但问题本质是后端的，按群匹配比按人匹配合理
+- 大部分日常消息按飞书应用入口分就够了
+- 总要有个兜底，归属不清的事本来就是研发经理的活
 
-## AgentEnv：每个 Agent 一个独立世界
+这四层从具体到笼统，层层兜住。跟你在团队里分配需求的逻辑一样：先看是不是产品经理交代的，再看是不是特定职责域的群，再看是从哪个应用入口进来的，最后兜底。
 
-路由决定了"谁来处理"，但处理需要资源。皮皮虾用 `AgentEnv` 封装了一个 Agent 运行所需的全部状态：
+路由器的代码实现很朴素，对 bindings 数组扫 4 遍，每遍只看对应层级的条件。bindings 数量通常就几条，O(4n) 无所谓。
 
-```mermaid
-graph LR
-    subgraph AgentEnv["AgentEnv (per agent)"]
-        WS["Workspace<br/>~/.pp-claw/workspace-boss/"]
-        CM["ChatModel<br/>Claude / GPT / DeepSeek"]
-        ADK["ADK Runner<br/>Eino 工具调用循环"]
-        TR["Tools Registry<br/>文件/执行/搜索/消息..."]
-        SM["Session Manager<br/>sessions/"]
-        MEM["Memory Store<br/>MEMORY.md + HISTORY.md"]
-        CTX["Context Builder<br/>SOUL.md + USER.md + ..."]
-        SUB["Subagent Manager<br/>后台子任务"]
-        MCP["MCP Manager<br/>外部工具服务"]
-        SL["Session Locks<br/>sync.Map per chatID"]
-    end
-```
+## AgentEnv：每个人的独立工位
 
-关键点：**每个 Agent 的 Session 和 Memory 完全隔离**。
+路由决定了"谁来处理"，但处理需要一整套装备。每个 Agent 的工位上都有什么？
 
-同一个用户给老板应用发"你好"和给员工应用发"你好"，产生的 SessionKey 分别是 `boss:feishu:boss:chatID` 和 `employee:feishu:employee:chatID`——对话历史互不污染，记忆各自独立。
+![Gemini_Generated_Image_abmweiabmweiabmw](http://devyk.top/2022/202604041620641.png)
 
-这些 AgentEnv 实例由 `AgentEnvPool` 管理，采用**双重检查锁**的懒创建模式：
+
+
+关键点：**每个 Agent 的项目档案和笔记本完全隔离**。
+
+同一个用户给"研发经理应用"发"你好"和给"前端应用"发"你好"，产生的 SessionKey 分别是 `dev-manager:feishu:dev-manager:chatID` 和 `frontend:feishu:frontend:chatID`。就像你跟研发经理聊的内容不会出现在运维的笔记本里一样。
+
+这些工位由 `AgentEnvPool`（工位管理处）统一管理，采用**懒创建**：配置了 10 个 Agent 但只有 3 个实际收到过消息？那就只建 3 个工位。第一条消息到达时才搭工位，之后复用。
 
 ```go
 func (p *AgentEnvPool) GetOrCreate(agentID string) (*AgentEnv, error) {
-    // 快速路径：读锁查缓存
+    // 快速路径：读锁查缓存，工位已经在了，直接返回
     p.mu.RLock()
     env, ok := p.envs[agentID]
     p.mu.RUnlock()
@@ -162,7 +173,7 @@ func (p *AgentEnvPool) GetOrCreate(agentID string) (*AgentEnv, error) {
         return env, nil
     }
 
-    // 慢路径：写锁 + 二次检查 + 创建
+    // 慢路径：写锁 + 二次检查 + 搭建新工位
     p.mu.Lock()
     defer p.mu.Unlock()
     if env, ok = p.envs[agentID]; ok {
@@ -174,262 +185,111 @@ func (p *AgentEnvPool) GetOrCreate(agentID string) (*AgentEnv, error) {
 }
 ```
 
-第一条消息到达时才创建对应的 Agent 环境，之后复用。配置里声明了 10 个 Agent 但只有 3 个收到过消息？那就只有 3 个 AgentEnv 实例。
-
 ## 消息处理：并发但有序
 
-多 Agent 场景下最容易踩的坑是并发问题。两条消息几乎同时到达同一个群聊，你不能让它们并行处理——否则会话历史会乱序，模型看到的上下文不一致。
+多 Agent 最容易踩的坑是并发问题。
+
+举个场景：后端开发同时收到两个群的消息。「线上 Bug 群」产品经理问"消息路由那个 Bug 修了吗？"，「技术架构群」前端同事问"新的 Agent 状态接口联调了吗？"。这两条消息可以并行处理，因为它们是不同的对话上下文。
+
+但如果「线上 Bug 群」连续来了两条消息呢？第一条"路由 Bug 修了吗？"还没回完，产品经理第二条"顺便看看这个 PR"就到了。这时候必须排队，否则两条消息同时操作同一个对话历史，上下文就乱了。
 
 皮皮虾的方案是 **goroutine 级并发 + session 级串行**：
 
-```mermaid
-sequenceDiagram
-    participant Bus as 消息总线
-    participant Loop as AgentLoop
-    participant Router as AgentRouter
-    participant Pool as AgentEnvPool
-    participant Env as AgentEnv
-    participant LLM as 大模型
+![mermaid-diagram-2026-04-04-162035](http://devyk.top/2022/202604041620796.png)
 
-    Bus->>Loop: msg1 (boss, chatA)
-    Bus->>Loop: msg2 (employee, chatB)
-    Bus->>Loop: msg3 (boss, chatA)
 
-    par 并发分发
-        Loop->>Router: Resolve(msg1) → boss
-        Loop->>Router: Resolve(msg2) → employee
-        Loop->>Router: Resolve(msg3) → boss
-    end
 
-    par msg1 和 msg2 并行执行
-        Loop->>Pool: GetOrCreate("boss")
-        Pool-->>Env: AgentEnv[boss]
-        Note over Env: AcquireSession("boss:feishu:boss:chatA")<br/>获取锁 ✓
-        Env->>LLM: 处理 msg1
-        LLM-->>Env: 回复 msg1
+这就像后端开发可以同时处理「线上 Bug 群」和「技术架构群」的事情（不同上下文各干各的），但同一个群内部的对话必须一条一条来，不然回复顺序就乱了。
 
-        Loop->>Pool: GetOrCreate("employee")
-        Pool-->>Env: AgentEnv[employee]
-        Note over Env: AcquireSession("employee:feishu:employee:chatB")<br/>获取锁 ✓
-        Env->>LLM: 处理 msg2
-        LLM-->>Env: 回复 msg2
-    end
+实现上就是一个 `sync.Map` 存储 `sessionKey → *sync.Mutex`，简单到没什么好说的，但很关键。
 
-    Note over Loop: msg3 等待 msg1 完成
-    Loop->>Pool: GetOrCreate("boss")
-    Note over Env: AcquireSession("boss:feishu:boss:chatA")<br/>等待 msg1 释放锁...
-    Env->>LLM: 处理 msg3
-    LLM-->>Env: 回复 msg3
-```
+## 多账号渠道：一个飞书跑多个应用
 
-msg1（boss, chatA）和 msg2（employee, chatB）属于不同 session，完全并行。msg3（boss, chatA）和 msg1 属于同一 session，必须等 msg1 处理完才能开始。
+多 Agent 解决了"谁来处理"，还有"消息从哪来"。
 
-实现上就是一个 `sync.Map` 存储 `sessionKey → *sync.Mutex`：
+以飞书为例，PP-Claw 团队有三个飞书应用（研发经理用的、前端用的、后端用的），每个应用有不同的 `app_id`。传统做法是跑三个进程。皮皮虾的做法是**一个进程、三个 Channel 实例**，就像同一间办公室开三个门：
 
-```go
-func (env *AgentEnv) AcquireSession(sessionKey string) *sync.Mutex {
-    val, _ := env.sessionLocks.LoadOrStore(sessionKey, &sync.Mutex{})
-    return val.(*sync.Mutex)
-}
-```
+![Gemini_Generated_Image_29kkul29kkul29kk](http://devyk.top/2022/202604041622643.png)
 
-简单到没什么好说的，但很重要。
 
-## 多账号渠道：一个飞书跑三个应用
 
-多 Agent 只解决了"谁来处理"的问题，还有"消息从哪来"的问题。
-
-以飞书为例，如果你有三个飞书应用（老板、员工、马克），每个应用有不同的 `app_id` 和 `app_secret`，传统做法是跑三个进程。皮皮虾的做法是 **一个进程、三个 Channel 实例**：
-
-```mermaid
-graph TB
-    subgraph Config["feishu config"]
-        BASE["公共默认值<br/>group_policy: mention<br/>reply_to_message: true"]
-        ACC1["accounts.boss<br/>app_id: cli_a92c...<br/>group_policy: open"]
-        ACC2["accounts.employee<br/>app_id: cli_a942..."]
-        ACC3["accounts.make<br/>app_id: cli_a92d..."]
-    end
-
-    BASE -.->|"继承 + 覆盖"| ACC1
-    BASE -.->|"继承"| ACC2
-    BASE -.->|"继承"| ACC3
-
-    subgraph Manager["Channel Manager"]
-        I1["feishu:boss<br/>独立 WebSocket"]
-        I2["feishu:employee<br/>独立 WebSocket"]
-        I3["feishu:make<br/>独立 WebSocket"]
-    end
-
-    ACC1 --> I1
-    ACC2 --> I2
-    ACC3 --> I3
-```
-
-配置用的是"顶层默认 + 账号覆盖"的模式，灵感来自小龙虾的 `AccountConfig & { accounts?: Record<string, AccountConfig> }` 模式：
+配置用的是"顶层默认 + 账号覆盖"的模式。大部分配置在顶层写一遍，个别账号需要特殊处理的再覆盖：
 
 ```yaml
 feishu:
     enabled: true
-    # 顶层 = 公共默认值
+    # 顶层 = 团队统一规范
     group_policy: "mention"
     reply_to_message: true
     wiki_enabled: true
 
-    default_account: boss
+    default_account: dev-manager
     accounts:
-        boss:
+        dev-manager:
             app_id: "cli_a92c..."
             app_secret: "xxx"
-            group_policy: "open"    # 覆盖：老板群聊全放行
-        employee:
+            group_policy: "open"    # 研发经理群聊全放行
+        frontend:
             app_id: "cli_a942..."
             app_secret: "xxx"
-            # 继承 mention 模式
-        make:
+            # 继承 mention 模式，前端专心写码，别打扰
+        backend:
             app_id: "cli_a92d..."
             app_secret: "xxx"
 ```
 
-底层用了 Go 的 `yaml:",inline"` 嵌入 + 反射 `mergeNonZero` 做字段级合并。没有 `accounts` 时退化为单账号模式，完全向后兼容。
+没有 `accounts` 时自动退化为单账号模式，完全向后兼容。不改配置文件，老版本照样跑。
 
-## 多 Bot 群聊的 mention 难题
+## 多 Bot 群聊的 mention 问题
 
-多账号带来了一个意料之外的问题。
+多账号带来了一个开发时没想到的问题。
 
-当老板应用设为 `group_policy: "open"`（群聊全放行），员工应用设为 `"mention"`（@了才回）时，如果有人在群里 `@员工应用 你好`——**老板应用也会回复**。因为 "open" 模式下它不检查 @，看到群里任何消息都处理。
+场景：研发经理应用设为 `group_policy: open`（群聊全放行），前端应用设为 `mention`（@ 才回）。产品经理在群里发了一条 `@前端应用 这个 TUI 布局看一下`，结果**研发经理应用也回复了**。
 
-修复方案：启动时自动调用飞书 `/bot/v3/info` 获取自己的 `open_id`，在 "open" 模式下如果消息明确 @ 了某个 bot 且不是自己，就跳过。
+为什么？因为 open 模式不检查 @，群里任何消息都处理。但这条消息明明是产品经理发给前端的，研发经理插什么嘴？
 
-```mermaid
-flowchart TD
-    MSG["群聊消息: @员工应用 你好"] --> BOSS_CHECK
+这就像产品经理在需求评审会上说"前端你看一下这个交互"，结果研发经理也抢答了，因为他的规则是"所有讨论我都参与"。
 
-    subgraph 老板应用["老板应用 (group_policy: open)"]
-        BOSS_CHECK{"消息 @ 了某个 bot?"}
-        BOSS_CHECK -->|"是"| BOSS_SELF{"@ 的是自己?"}
-        BOSS_SELF -->|"不是，是员工应用"| BOSS_SKIP["跳过 ✓"]
-        BOSS_SELF -->|"是自己"| BOSS_PROC["处理"]
-        BOSS_CHECK -->|"没有 @ 任何 bot"| BOSS_PROC
-    end
+修复方案：启动时自动获取自己的身份 ID，在 open 模式下加一个判断。如果消息明确 @ 了某个 bot 且不是自己，就闭嘴。
 
-    MSG --> EMP_CHECK
+![mermaid-diagram-2026-04-04-162307](http://devyk.top/2022/202604041623846.png)
 
-    subgraph 员工应用["员工应用 (group_policy: mention)"]
-        EMP_CHECK{"被 @ 了?"}
-        EMP_CHECK -->|"是"| EMP_PROC["处理 ✓"]
-        EMP_CHECK -->|"否"| EMP_SKIP["跳过"]
-    end
-```
 
-## 记忆系统：每个 Agent 有自己的大脑
 
-皮皮虾的记忆是双层结构：
+## 记忆系统：每个人有自己的笔记本
 
-- **MEMORY.md**：长期记忆，每次巩固时全量替换。存储用户画像、偏好、关键事实
-- **HISTORY.md**：追加式事件日志，可 grep 搜索
+每个 Agent 的记忆是独立的，分两层：
 
-记忆巩固由 LLM 驱动——当未巩固消息数超过 `memory_window` 阈值时，异步触发：
+- **MEMORY.md**（长期记忆）：类似个人笔记本里的"重要事项"页，记录用户画像、偏好、关键结论。每次巩固时全量更新。
+- **HISTORY.md**（事件日志）：类似工作日志，只追加不修改，记录发生了什么事。
 
-```mermaid
-flowchart LR
-    CONV["对话历史<br/>(50条未巩固)"] --> TRIGGER{"未巩固 >= memory_window?"}
-    TRIGGER -->|"是"| CONSOLIDATE["异步巩固"]
-    TRIGGER -->|"否"| WAIT["继续累积"]
+记忆巩固由 LLM 驱动，当未整理的对话超过阈值时，异步触发整理：
 
-    CONSOLIDATE --> LLM_CALL["LLM 分析对话<br/>调用 save_memory 工具"]
-    LLM_CALL --> MEMORY["更新 MEMORY.md<br/>(全量替换)"]
-    LLM_CALL --> HISTORY["追加 HISTORY.md<br/>(事件日志)"]
-```
+![mermaid-diagram-2026-04-04-162338](http://devyk.top/2022/202604041623692.png)
 
-关键：**每个 Agent 的 MemoryStore 绑定到自己的 workspace**。老板 Agent 的记忆在 `workspace-boss/memory/`，员工 Agent 的在 `workspace-employee/memory/`。同一个用户分别和两个 Agent 聊天，产生的记忆是独立的。
 
-如果 LLM 巩固连续失败 3 次，会降级为原文归档——不丢数据，只是不那么"聪明"。
 
-## 子 Agent：后台军团
+关键：**每个 Agent 的记忆存在自己的 workspace 下**。研发经理 Agent 的记忆在 `workspace-dev-manager/memory/`，前端 Agent 的在 `workspace-frontend/memory/`。就像每个人的笔记本锁在自己抽屉里，别人看不到也改不了。
 
-除了通过路由分配的命名 Agent，皮皮虾还支持**运行时动态生成的子 Agent**。
+如果 LLM 整理连续失败 3 次，会降级为原文归档，宁可笨一点，也不丢数据。
 
-主 Agent 可以通过 `spawn` 工具启动后台任务。子 Agent 有自己的 LLM 循环（最多 15 轮），但工具集是受限的——能读写文件、执行命令、搜索网页，但**不能发消息给用户，也不能再 spawn 子 Agent**（防止递归炸弹）。
+## 子 Agent：给正式员工配实习生
 
-```mermaid
-sequenceDiagram
-    participant User as 用户
-    participant Main as 主 Agent
-    participant Sub as 子 Agent (后台)
-    participant Bus as 消息总线
+除了通过路由分配的"正式员工"Agent，皮皮虾还支持**运行时动态生成的子 Agent**，可以理解为给正式员工临时分配实习生。
 
-    User->>Main: "帮我分析一下这个仓库的代码质量"
-    Main->>Main: spawn("分析代码质量", "code-audit")
-    Main-->>User: "好的，已启动后台分析任务"
+主 Agent 觉得某个任务比较重（比如产品经理让后端开发跑一遍 PP-Claw 仓库的代码质量检查），可以 spawn 一个子 Agent 在后台跑。子 Agent 有自己的 LLM 循环（最多 15 轮），但权限是受限的，能读写文件、执行命令、搜索网页，但**不能直接回复用户，也不能再派实习生**（防止无限套娃）。
 
-    activate Sub
-    Note over Sub: 独立 LLM 循环 (最多15轮)<br/>工具: 读文件、执行命令、搜索<br/>无消息发送、无递归 spawn
-    Sub->>Sub: read_file("main.go")
-    Sub->>Sub: exec("go vet ./...")
-    Sub->>Sub: exec("golangci-lint run")
-    Sub->>Sub: 整理分析报告
-    deactivate Sub
+![mermaid-diagram-2026-04-04-162427](http://devyk.top/2022/202604041624006.png)
 
-    Sub->>Bus: 系统消息 (subagent 结果)
-    Bus->>Main: 收到子 Agent 报告
-    Main->>Main: LLM 评估 + 生成用户摘要
-    Main-->>User: "代码分析完成：发现3个潜在问题..."
-```
+子 Agent 干完活不是直接把结果甩给用户，而是先交给主 Agent 过目。主 Agent 再用自己的判断力把原始结果翻译成用户能看懂的摘要。用户看到的永远是经过"正式员工审核"的内容，而不是实习生的原始输出。
 
-子 Agent 完成后不是直接把结果甩给用户，而是先发到消息总线的 "system" 通道，主 Agent 收到后再跑一遍模型来生成用户友好的摘要。这样用户看到的永远是经过主 Agent "翻译"的结果，而不是原始的工具输出。
+## 实战：从零配置一个研发团队
 
-## 与小龙虾的对比
+![image-20260404183405106](http://devyk.top/2022/202604041834125.png)
 
-说实话，皮皮虾的多 Agent 和小龙虾的多 Agent，解决的是**同一类问题**，但走了**完全不同的路**。
+假设你有三个飞书应用，想让它们分别对接"研发经理"、"前端开发"、"后端开发"三个角色：
 
-### 设计理念
-
-小龙虾是一个"平台"思维。43 万行 TypeScript，Controller 统一调度，Plugin Runtime 沙箱隔离，Agent 之间通过 WS RPC 通信。它的目标是让你能在上面搭建任意复杂的多 Agent 工作流，Agent 之间可以互相调用、协商、分工。
-
-皮皮虾是一个"工具"思维。8000 多行 Go，没有 Controller，没有 RPC，没有沙箱。它的目标是让你用 30 行 YAML 就能把"一个进程服务多种角色"这件事搞定。Agent 之间的关系不是"协作"，而是"各管各的"。
-
-### 具体差异
-
-| 维度 | 小龙虾 (OpenClaw) | 皮皮虾 (PP-Claw) |
-|------|-------------------|------------------|
-| **代码量** | 43w+ 行 TypeScript | 8000+ 行 Go |
-| **Agent 选择** | Controller 动态调度 | 静态 binding 声明式路由 |
-| **Agent 间通信** | WS RPC，Agent 可互相调用 | 无直接通信（仅 spawn 子任务） |
-| **资源隔离** | Plugin Runtime 沙箱 | Workspace 目录级隔离 |
-| **工具分配** | 每个 Agent 可配置不同工具集 | 所有 Agent 共享同一工具集 |
-| **运行时开销** | Node.js，内存较高 | 单二进制，~15MB 内存 |
-| **部署复杂度** | npm + 依赖链 | 一个二进制文件 |
-| **多账号** | accounts map + defaultAccount | 同样的 accounts + default_account |
-| **配置方式** | YAML / 环境变量 | YAML（完全对齐） |
-| **并发模型** | 单线程事件循环 | goroutine 真并发 |
-
-### 皮皮虾的优势
-
-1. **极简部署**。单个 Go 二进制，15MB 内存，0.3 秒启动。树莓派都能跑。
-2. **声明式路由**。加一个 Agent 就是加几行 YAML，不用写一行代码。
-3. **真并发**。不同 session 的消息 goroutine 级并行，不存在事件循环阻塞的问题。
-4. **配置兼容**。多账号配置模式和小龙虾完全对齐，迁移零成本。
-
-### 皮皮虾的不足
-
-1. **Agent 间不能协作**。老板 Agent 没法"请教"翻译 Agent。小龙虾可以。
-2. **工具集不能按 Agent 定制**。所有 Agent 拿到的工具一模一样。如果你希望翻译 Agent 不能执行 shell 命令，目前做不到。
-3. **路由是静态的**。不能根据消息内容动态决定交给哪个 Agent（比如"这条消息像是在问代码问题，转给 code-review Agent"）。小龙虾的 Controller 可以做到。
-4. **没有工作流编排**。多个 Agent 串行或并行执行一个复杂任务，皮皮虾还不支持。
-
-### 怎么选？
-
-如果你的需求是"**多个角色各自独立服务不同的人群**"——用皮皮虾。30 行配置搞定，维护成本约等于零。
-
-如果你的需求是"**多个 Agent 协作完成复杂任务**"——用小龙虾。Controller + RPC 的架构天然支持这种场景。
-
-大部分场景下，前者就够了。
-
-## 实战：从零配置一个三 Agent 军团
-
-假设你有三个飞书应用，想让它们各自对接不同的 Agent：
-
-### 第一步：声明 Agent
+### 第一步：定义团队成员
 
 ```yaml
 agents:
@@ -442,144 +302,140 @@ agents:
         memory_window: 50
 
     list:
-        - id: make
-          name: "马克个人助手"
+        - id: dev-manager
+          name: "研发经理助手"
           default: true
-          max_tool_iterations: 80
+          workspace: ~/.pp-claw/workspace-dev-manager
+          max_tool_iterations: 80    # 经理要统筹全局，工具链给足额度
 
-        - id: employee
-          name: "员工助手"
-          workspace: ~/.pp-claw/workspace-employee
+        - id: frontend
+          name: "前端开发助手"
+          workspace: ~/.pp-claw/workspace-frontend
           max_tool_iterations: 40
 
-        - id: boss
-          name: "老板助手"
-          workspace: ~/.pp-claw/workspace-boss
+        - id: backend
+          name: "后端开发助手"
+          workspace: ~/.pp-claw/workspace-backend
           max_tool_iterations: 40
 ```
 
-每个 Agent 可以覆盖 `defaults` 中的任意字段。不指定的就继承默认值。
+每个成员可以覆盖 `defaults` 里的配置，不写的就用默认值。
 
-### 第二步：配置路由
+### 第二步：分配工作职责（路由）
 
 ```yaml
     bindings:
-        - agent_id: make
+        - agent_id: backend
           channel: feishu
-          account_id: make
+          account_id: backend
 
-        - agent_id: employee
+        - agent_id: frontend
           channel: feishu
-          account_id: employee
+          account_id: frontend
 
-        - agent_id: boss
+        - agent_id: dev-manager
           channel: feishu
-          account_id: boss
+          account_id: dev-manager
 
-        - agent_id: make
-          default: true
+        - agent_id: dev-manager
+          default: true    # 没人认领的消息，研发经理兜底
 ```
 
-`account_id` 对应的是下面 `accounts` map 里的 key。
-
-### 第三步：配置飞书多账号
+### 第三步：配置各自的飞书应用
 
 ```yaml
 channels:
     feishu:
         enabled: true
-        # 公共默认值
         group_policy: "mention"
         react_emoji: "THUMBSUP"
         reply_to_message: true
         wiki_enabled: true
 
-        default_account: boss
+        default_account: dev-manager
         accounts:
-            make:
+            backend:
                 app_id: "cli_a92d..."
                 app_secret: "xxx"
-            employee:
+            frontend:
                 app_id: "cli_a942..."
                 app_secret: "xxx"
-            boss:
+            dev-manager:
                 app_id: "cli_a92c..."
                 app_secret: "xxx"
-                group_policy: "open"  # 老板应用群聊全放行
+                group_policy: "open"  # 研发经理群聊全放行
 ```
 
-### 第四步：启动
+### 第四步：开工
 
 ```bash
 ./pp-claw gateway
 ```
 
-一条命令。三个飞书应用各自建立 WebSocket 连接，三个 Agent 环境按需创建，消息自动路由。
-
-启动日志里你会看到：
+一条命令。三个飞书应用各自建立 WebSocket 连接，三个 Agent 环境按需创建，消息自动路由。日志里你会看到：
 
 ```
-AgentEnv 创建完成  agent_id=boss   workspace=~/.pp-claw/workspace-boss    tools=14
-AgentEnv 创建完成  agent_id=employee  workspace=~/.pp-claw/workspace-employee  tools=14
-AgentEnv 创建完成  agent_id=make   workspace=~/.pp-claw/workspace   tools=14
+AgentEnv 创建完成  agent_id=dev-manager  workspace=~/.pp-claw/workspace-dev-manager  tools=14
+AgentEnv 创建完成  agent_id=frontend     workspace=~/.pp-claw/workspace-frontend      tools=14
+AgentEnv 创建完成  agent_id=backend      workspace=~/.pp-claw/workspace               tools=14
 ```
 
-三个独立的世界，一个进程搞定。
+三个工位搭好了，各就各位。
 
-## 端到端消息流（以老板应用群聊消息为例）
+## 端到端消息流
 
-把完整链路串一遍：
+把一条消息从进门到出门的完整链路走一遍，以研发经理群聊收到消息为例：
 
 ```mermaid
 sequenceDiagram
     participant FS as 飞书服务器
-    participant CH as FeishuChannel<br/>(feishu:boss)
-    participant BUS as MessageBus
-    participant LOOP as AgentLoop
-    participant RTR as AgentRouter
-    participant POOL as AgentEnvPool
-    participant ENV as AgentEnv[boss]
-    participant LLM as Claude Opus
-    participant MGR as Channel Manager
+    participant CH as FeishuChannel<br/>(feishu:dev-manager)
+    participant MB as MessageBus
+    participant AL as AgentLoop
+    participant RT as AgentRouter
+    participant PL as AgentEnvPool
+    participant EV as AgentEnv<br/>(研发经理)
+    participant LM as Claude Opus
+    participant MG as ChannelManager
 
     FS->>CH: WebSocket 推送消息
-    Note over CH: group_policy=open<br/>检查: 没有 @其它bot → 通过
-    CH->>CH: HandleMessage()<br/>AccountID = "boss"
-    CH->>BUS: PublishInbound<br/>SessionKey = "feishu:boss:chatID"
+    Note over CH: group_policy=open<br/>检查: 没有 @其它bot → 放行
+    CH->>CH: HandleMessage()<br/>AccountID = "dev-manager"
+    CH->>MB: PublishInbound<br/>SessionKey = "feishu:dev-manager:chatID"
 
-    BUS->>LOOP: ConsumeInbound
+    MB->>AL: 消费入站消息
 
-    LOOP->>RTR: Resolve("feishu", "boss", chatID, senderID)
-    RTR-->>LOOP: agentID = "boss"
+    AL->>RT: Resolve("feishu", "dev-manager", chatID, senderID)
+    RT-->>AL: agentID = "dev-manager"
 
-    LOOP->>POOL: GetOrCreate("boss")
-    POOL-->>LOOP: AgentEnv[boss]
+    AL->>PL: GetOrCreate("dev-manager")
+    PL-->>AL: 研发经理工位
 
-    LOOP->>ENV: AcquireSession("boss:feishu:boss:chatID")
-    Note over ENV: 获取 session 锁
+    AL->>EV: AcquireSession("dev-manager:feishu:dev-manager:chatID")
+    Note over EV: 获取 session 锁
 
-    ENV->>ENV: 加载会话历史 + 构建 system prompt
-    ENV->>LLM: [system, ...history, user_msg]
-    LLM-->>ENV: "好的，已收到..."
+    EV->>EV: 加载对话历史 + 构建 system prompt
+    EV->>LM: [system, ...history, user_msg]
+    LM-->>EV: "好的，已收到..."
 
-    ENV->>ENV: saveTurn() 保存到 workspace-boss/sessions/
-    ENV->>BUS: PublishOutbound<br/>Channel="feishu", AccountID="boss"
+    EV->>EV: saveTurn() 保存到 workspace-dev-manager/sessions/
+    EV->>MB: PublishOutbound<br/>Channel="feishu", AccountID="dev-manager"
 
-    BUS->>MGR: dispatchOutbound
-    MGR->>MGR: resolveOutboundKey("feishu", "boss")<br/>→ "feishu:boss"
-    MGR->>CH: Send(msg)
-    CH->>FS: 飞书 API 回复消息
+    MB->>MG: 分发出站消息
+    MG->>MG: 找到 "feishu:dev-manager" 对应的 Channel
+    MG->>CH: Send(msg)
+    CH->>FS: 飞书 API 发送回复
 ```
 
 ## 写在最后
 
-皮皮虾的多 Agent 不是什么革命性的设计。它就是把一个简单的需求——**一个进程服务多种角色**——用最朴素的方式实现了。
+回头看，皮皮虾的多 Agent 架构没什么高深的东西。
 
-没有复杂的调度算法，没有花哨的通信协议。一个路由表、一个环境池、一组 mutex，就这么多。
+就是把"一个人干所有事"变成了"每个人干自己的事"。一个路由表决定谁来干，一个环境池给每人配好装备，一组锁保证同一件事不会两个人同时抢。
 
-但有时候，工程的价值就在于此。不是做出了什么惊天动地的东西，而是把一个常见的痛点，用尽可能少的代码、尽可能低的运行成本、尽可能简单的配置解决掉。
+没有复杂的调度算法，没有 Agent 之间的协作协议。这些以后可以加，但目前大部分场景不需要。你的研发团队里，前端和后端各写各的代码，不需要实时共享脑子，只要别踩到对方的代码就行了。
 
-如果你也有类似的需求——一个飞书应用给老板、一个给团队、一个给自己——不妨试试。30 行 YAML，创建你的 Agent 军团。
+如果你也有类似的需求，一个飞书应用给研发经理对接产品经理、一个给前端团队专注交互开发、一个给后端同学处理线上问题，每个角色有自己的行为策略和记忆空间，30 行 YAML 就能搞定。
 
 ---
 
