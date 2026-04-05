@@ -242,6 +242,9 @@ func (w *WechatPersonalChannel) uploadOutboundMedia(ctx context.Context, account
 	if err != nil {
 		return nil, 0, err
 	}
+	if bizErr := resp.bizErr(); bizErr != nil {
+		return nil, 0, fmt.Errorf("wechat getuploadurl: %w", bizErr)
+	}
 	if resp.UploadParam == "" {
 		return nil, 0, fmt.Errorf("wechat getuploadurl returned empty upload_param")
 	}

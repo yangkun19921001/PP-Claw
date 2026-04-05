@@ -331,7 +331,17 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 		Content: sysPrompt,
 	})
 
-	for _, h := range history {
+	// Skip leading assistant messages in history to ensure the first
+	// non-system message is always a user message (LLM requirement).
+	startIdx := 0
+	for startIdx < len(history) {
+		role, _ := history[startIdx]["role"].(string)
+		if role == "user" {
+			break
+		}
+		startIdx++
+	}
+	for _, h := range history[startIdx:] {
 		role, _ := h["role"].(string)
 		content, _ := h["content"].(string)
 		var schemaRole schema.RoleType
@@ -468,7 +478,7 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 			zap.Int("unconsolidated", unconsolidated),
 			zap.Int("memory_window", env.MemoryWindow),
 		)
-		go consolidateMemory(env, ctx, sess, false, logger)
+		go consolidateMemory(env, context.Background(), sess, false, logger)
 	}
 
 	// 如果 MessageTool 已经在本轮回合中发送过消息，则不再重复发送

@@ -126,7 +126,7 @@ node scripts/config-manager.js --reset
 2. Extract text to convert (filter out "tts" keywords)
 3. Determine voice based on text language (auto-detect or user preference)
 4. Run `tts-converter.js` via `shell_exec`
-5. Return `MEDIA: /path/to/output.mp3` so the channel can deliver audio
+5. Use the `message` tool with the `media` parameter to send the audio file, e.g. `message(content="Here is your audio", media=["/tmp/output.mp3"])`
 
 ## Installation
 

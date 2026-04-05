@@ -88,6 +88,7 @@ Your workspace is at: %s
 - Custom skills: %s/skills/{skill-name}/SKILL.md
 
 Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel.
+When you need to send media files (images, audio, video, documents), you MUST use the 'message' tool with the 'media' parameter containing the file paths. Direct text replies cannot carry media attachments.
 
 ## Tool Call Guidelines
 - Before calling tools, you may briefly state your intent (e.g. "Let me check that"), but NEVER predict or describe the expected result before receiving it.

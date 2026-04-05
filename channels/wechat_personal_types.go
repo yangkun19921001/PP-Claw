@@ -1,6 +1,9 @@
 package channels
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 const (
 	wechatMessageTypeUser = 1
@@ -22,6 +25,25 @@ const (
 
 type wechatBaseInfo struct {
 	ChannelVersion string `json:"channel_version,omitempty"`
+}
+
+// wechatBaseResponse captures the business-level error fields that WeChat APIs
+// may return inside an HTTP 200 response body. Embed this in any response struct
+// that needs error checking.
+type wechatBaseResponse struct {
+	Ret    int    `json:"ret,omitempty"`
+	ErrMsg string `json:"errmsg,omitempty"`
+}
+
+func (r *wechatBaseResponse) bizErr() error {
+	if r == nil || r.Ret == 0 {
+		return nil
+	}
+	msg := r.ErrMsg
+	if msg == "" {
+		msg = "unknown error"
+	}
+	return fmt.Errorf("wechat biz error ret=%d: %s", r.Ret, msg)
 }
 
 type wechatCDNMedia struct {
@@ -123,6 +145,7 @@ type wechatGetUploadURLRequest struct {
 }
 
 type wechatGetUploadURLResponse struct {
+	wechatBaseResponse
 	UploadParam      string `json:"upload_param,omitempty"`
 	ThumbUploadParam string `json:"thumb_upload_param,omitempty"`
 }

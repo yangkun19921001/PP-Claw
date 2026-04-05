@@ -107,7 +107,7 @@ func (w *WechatPersonalChannel) apiPost(ctx context.Context, baseURL, endpoint, 
 		return nil
 	}
 	if len(raw) == 0 {
-		return nil
+		return fmt.Errorf("wechat API %s returned empty body", endpoint)
 	}
 	return json.Unmarshal(raw, out)
 }
