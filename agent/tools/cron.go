@@ -14,6 +14,7 @@ type CronTool struct {
 	channel     string
 	accountID   string
 	chatID      string
+	UsedInTurn  bool
 }
 
 func (t *CronTool) Name() string { return "cron" }
@@ -60,6 +61,8 @@ func (t *CronTool) Parameters() map[string]any {
 }
 
 func (t *CronTool) Execute(ctx context.Context, params map[string]any) (string, error) {
+	t.UsedInTurn = true
+
 	action, _ := params["action"].(string)
 	message, _ := params["message"].(string)
 	cronExpr, _ := params["cron_expr"].(string)
@@ -83,6 +86,10 @@ func (t *CronTool) Execute(ctx context.Context, params map[string]any) (string, 
 	default:
 		return fmt.Sprintf("Unknown action: %s", action), nil
 	}
+}
+
+func (t *CronTool) StartTurn() {
+	t.UsedInTurn = false
 }
 
 // addJob 添加任务 (对标 cron.py:_add_job)
@@ -135,6 +142,16 @@ func (t *CronTool) listJobs() (string, error) {
 		return "Error: cron service not configured", nil
 	}
 	jobs := t.CronService.ListJobs(false)
+	// 按当前 channel 过滤
+	if t.channel != "" {
+		var filtered []cron.CronJob
+		for _, j := range jobs {
+			if j.Payload.Channel == t.channel {
+				filtered = append(filtered, j)
+			}
+		}
+		jobs = filtered
+	}
 	if len(jobs) == 0 {
 		return "No scheduled jobs.", nil
 	}

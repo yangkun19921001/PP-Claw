@@ -941,13 +941,16 @@ func newCronCmd() *cobra.Command {
 		Short: "Manage scheduled jobs",
 	}
 
-	cmd.AddCommand(&cobra.Command{
+	var listChannel string
+	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all scheduled jobs",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cronList()
+			return cronList(listChannel)
 		},
-	})
+	}
+	listCmd.Flags().StringVar(&listChannel, "channel", "", "Filter by channel (e.g. cli, wechat_personal, telegram)")
+	cmd.AddCommand(listCmd)
 
 	var jobID string
 	removeCmd := &cobra.Command{
@@ -1019,16 +1022,34 @@ func getCronService() *cron.Service {
 	return cron.NewService(storePath, nil)
 }
 
-func cronList() error {
+func cronList(channelFilter string) error {
 	svc := getCronService()
 	jobs := svc.ListJobs(true)
 
+	if channelFilter != "" {
+		var filtered []cron.CronJob
+		for _, j := range jobs {
+			if j.Payload.Channel == channelFilter {
+				filtered = append(filtered, j)
+			}
+		}
+		jobs = filtered
+	}
+
 	if len(jobs) == 0 {
-		fmt.Println("No scheduled jobs.")
+		if channelFilter != "" {
+			fmt.Printf("No scheduled jobs for channel '%s'.\n", channelFilter)
+		} else {
+			fmt.Println("No scheduled jobs.")
+		}
 		return nil
 	}
 
-	fmt.Printf("ð\x9f\x95\x92 Scheduled Jobs (%d):\n\n", len(jobs))
+	title := fmt.Sprintf("🕒 Scheduled Jobs (%d)", len(jobs))
+	if channelFilter != "" {
+		title = fmt.Sprintf("🕒 Scheduled Jobs for channel '%s' (%d)", channelFilter, len(jobs))
+	}
+	fmt.Printf("%s:\n\n", title)
 	for _, j := range jobs {
 		status := "✅"
 		if !j.Enabled {
@@ -1036,6 +1057,9 @@ func cronList() error {
 		}
 		fmt.Printf("  %s %s (id: %s)\n", status, j.Name, j.ID)
 		fmt.Printf("    Schedule: %s\n", formatSchedule(j.Schedule))
+		if j.Payload.Channel != "" {
+			fmt.Printf("    Channel: %s\n", j.Payload.Channel)
+		}
 		if j.Payload.Message != "" {
 			msg := j.Payload.Message
 			if len(msg) > 60 {
