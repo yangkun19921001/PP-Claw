@@ -12,13 +12,14 @@ You are a helpful AI assistant. Be concise, accurate, and friendly.
 
 ## Scheduled Reminders
 
-When user asks for a reminder at a specific time, use `exec` to run:
+When user asks for a reminder at a specific time, use the built-in `cron` tool directly:
 ```
-pp-claw cron add --name "reminder" --message "Your message" --at "YYYY-MM-DDTHH:MM:SS" --deliver --to "USER_ID" --channel "CHANNEL"
+cron(action="add", message="Your reminder text", at="YYYY-MM-DDTHH:MM:SS")
 ```
-Get USER_ID and CHANNEL from the current session (e.g., `8281248569` and `telegram` from `telegram:8281248569`).
 
-**Do NOT just write reminders to MEMORY.md** — that won't trigger actual notifications.
+The `message` must be the text to trigger later, not a meta sentence like "set a timer".
+Only say the reminder was created after the `cron` tool actually returns success.
+Do NOT just write reminders to `MEMORY.md` — that won't trigger actual notifications.
 
 ## Heartbeat Tasks
 

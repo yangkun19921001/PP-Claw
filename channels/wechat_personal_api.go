@@ -14,6 +14,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -221,53 +223,259 @@ func (w *WechatPersonalChannel) getUpdates(ctx context.Context, account *wechatA
 }
 
 func (w *WechatPersonalChannel) sendMessage(ctx context.Context, account *wechatAccountRuntime, req *wechatSendMessageRequest) error {
-	return w.apiPost(ctx, account.baseURL, wechatAPIPathSendMessage, account.token, req, w.requestTimeoutMS, nil)
+	itemType := 0
+	if req != nil && req.Msg != nil && len(req.Msg.ItemList) > 0 && req.Msg.ItemList[0] != nil {
+		itemType = req.Msg.ItemList[0].Type
+	}
+	bodyJSON := ""
+	if raw, err := json.Marshal(req); err == nil {
+		bodyJSON = string(raw)
+	} else {
+		bodyJSON = fmt.Sprintf(`{"marshal_error":%q}`, err.Error())
+	}
+	w.Logger.Info("微信 sendmessage 请求",
+		zap.String("account_id", account.id),
+		zap.String("to_user_id", req.Msg.ToUserID),
+		zap.String("item_type", wechatMessageItemTypeName(itemType)),
+		zap.Int("item_count", len(req.Msg.ItemList)),
+		zap.Bool("has_context_token", strings.TrimSpace(req.Msg.ContextToken) != ""),
+		zap.String("body_json", bodyJSON),
+	)
+	var resp wechatSendMessageResponse
+	if err := w.apiPost(ctx, account.baseURL, wechatAPIPathSendMessage, account.token, req, w.requestTimeoutMS, &resp); err != nil {
+		w.Logger.Error("微信 sendmessage HTTP 失败",
+			zap.String("account_id", account.id),
+			zap.String("to_user_id", req.Msg.ToUserID),
+			zap.String("item_type", wechatMessageItemTypeName(itemType)),
+			zap.Error(err),
+		)
+		return err
+	}
+	if bizErr := resp.bizErr(); bizErr != nil {
+		w.Logger.Error("微信 sendmessage 业务失败",
+			zap.String("account_id", account.id),
+			zap.String("to_user_id", req.Msg.ToUserID),
+			zap.String("item_type", wechatMessageItemTypeName(itemType)),
+			zap.Int("ret", resp.Ret),
+			zap.Int("errcode", resp.ErrCode),
+			zap.String("errmsg", resp.ErrMsg),
+		)
+		return fmt.Errorf("wechat sendmessage: %w", bizErr)
+	}
+	w.Logger.Info("微信 sendmessage 成功",
+		zap.String("account_id", account.id),
+		zap.String("to_user_id", req.Msg.ToUserID),
+		zap.String("item_type", wechatMessageItemTypeName(itemType)),
+	)
+	return nil
 }
 
 func (w *WechatPersonalChannel) getUploadURL(ctx context.Context, account *wechatAccountRuntime, req *wechatGetUploadURLRequest) (*wechatGetUploadURLResponse, error) {
+	w.Logger.Info("微信 getuploadurl 请求",
+		zap.String("account_id", account.id),
+		zap.String("to_user_id", req.ToUserID),
+		zap.String("media_type", wechatMediaTypeName(req.MediaType)),
+		zap.Int("raw_size", req.RawSize),
+		zap.Int("file_size", req.FileSize),
+		zap.Bool("no_need_thumb", req.NoNeedThumb),
+	)
 	var resp wechatGetUploadURLResponse
 	if err := w.apiPost(ctx, account.baseURL, wechatAPIPathGetUploadURL, account.token, req, w.requestTimeoutMS, &resp); err != nil {
+		w.Logger.Error("微信 getuploadurl 失败",
+			zap.String("account_id", account.id),
+			zap.String("to_user_id", req.ToUserID),
+			zap.String("media_type", wechatMediaTypeName(req.MediaType)),
+			zap.Error(err),
+		)
 		return nil, err
 	}
+	w.Logger.Info("微信 getuploadurl 响应",
+		zap.String("account_id", account.id),
+		zap.String("to_user_id", req.ToUserID),
+		zap.String("media_type", wechatMediaTypeName(req.MediaType)),
+		zap.Int("ret", resp.Ret),
+		zap.Int("errcode", resp.ErrCode),
+		zap.Bool("has_upload_param", strings.TrimSpace(resp.UploadParam) != ""),
+		zap.Bool("has_upload_full_url", strings.TrimSpace(resp.UploadFullURL) != ""),
+	)
 	return &resp, nil
 }
 
-func (w *WechatPersonalChannel) getConfig(ctx context.Context, account *wechatAccountRuntime, contextToken string) (*wechatGetConfigResponse, error) {
+func (w *WechatPersonalChannel) getConfig(ctx context.Context, account *wechatAccountRuntime, userID, contextToken string) (*wechatGetConfigResponse, error) {
 	var resp wechatGetConfigResponse
 	err := w.apiPost(ctx, account.baseURL, wechatAPIPathGetConfig, account.token, wechatGetConfigRequest{
-		ILinkUserID:  account.ilinkUserID,
+		ILinkUserID:  userID,
 		ContextToken: contextToken,
 		BaseInfo:     wechatBaseInfo{ChannelVersion: wechatAPIChannelVersion},
 	}, w.configTimeoutMS, &resp)
 	if err != nil {
 		return nil, err
 	}
+	if bizErr := resp.bizErr(); bizErr != nil {
+		return nil, bizErr
+	}
 	return &resp, nil
 }
 
-func (w *WechatPersonalChannel) sendTyping(ctx context.Context, account *wechatAccountRuntime, status int, contextToken string) error {
+func (w *WechatPersonalChannel) getTypingTicket(ctx context.Context, account *wechatAccountRuntime, userID, contextToken string) (string, error) {
+	if account == nil || userID == "" {
+		return "", nil
+	}
+	now := time.Now()
 	account.mu.RLock()
-	typingTicket := account.typingTicket
+	entry := account.typingTickets[userID]
 	account.mu.RUnlock()
+	if entry != nil && !entry.NextFetchAt.IsZero() && now.Before(entry.NextFetchAt) {
+		return entry.Ticket, nil
+	}
 
-	if typingTicket == "" {
-		cfg, err := w.getConfig(ctx, account, contextToken)
-		if err != nil {
-			return err
-		}
-		typingTicket = cfg.TypingTicket
+	cfg, err := w.getConfig(ctx, account, userID, contextToken)
+	if err == nil {
+		ticket := strings.TrimSpace(cfg.TypingTicket)
 		account.mu.Lock()
-		account.typingTicket = typingTicket
+		if account.typingTickets == nil {
+			account.typingTickets = make(map[string]*wechatTypingTicketState)
+		}
+		account.typingTickets[userID] = &wechatTypingTicketState{
+			Ticket:        ticket,
+			EverSucceeded: true,
+			NextFetchAt:   now.Add(wechatTypingTicketTTL),
+			RetryDelayS:   int(wechatTypingTicketInitialBackoff.Seconds()),
+		}
 		account.mu.Unlock()
 		_ = w.saveAccountState(account)
+		return ticket, nil
 	}
-	if typingTicket == "" || account.ilinkUserID == "" {
+
+	backoff := wechatTypingTicketInitialBackoff
+	if entry != nil && entry.RetryDelayS > 0 {
+		backoff = time.Duration(entry.RetryDelayS) * time.Second
+		if backoff < wechatTypingTicketInitialBackoff {
+			backoff = wechatTypingTicketInitialBackoff
+		}
+	}
+	nextBackoff := backoff * 2
+	if nextBackoff > wechatTypingTicketMaxBackoff {
+		nextBackoff = wechatTypingTicketMaxBackoff
+	}
+
+	account.mu.Lock()
+	if account.typingTickets == nil {
+		account.typingTickets = make(map[string]*wechatTypingTicketState)
+	}
+	if entry == nil {
+		entry = &wechatTypingTicketState{}
+		account.typingTickets[userID] = entry
+	}
+	entry.NextFetchAt = now.Add(backoff)
+	entry.RetryDelayS = int(nextBackoff.Seconds())
+	ticket := entry.Ticket
+	account.mu.Unlock()
+	_ = w.saveAccountState(account)
+	if ticket != "" {
+		return ticket, nil
+	}
+	return "", err
+}
+
+func (w *WechatPersonalChannel) sendTyping(ctx context.Context, account *wechatAccountRuntime, userID, typingTicket string, status int) error {
+	if typingTicket == "" || userID == "" {
 		return nil
 	}
-	return w.apiPost(ctx, account.baseURL, wechatAPIPathSendTyping, account.token, wechatSendTypingRequest{
-		ILinkUserID:  account.ilinkUserID,
+	var resp wechatBaseResponse
+	if err := w.apiPost(ctx, account.baseURL, wechatAPIPathSendTyping, account.token, wechatSendTypingRequest{
+		ILinkUserID:  userID,
 		TypingTicket: typingTicket,
 		Status:       status,
 		BaseInfo:     wechatBaseInfo{ChannelVersion: wechatAPIChannelVersion},
-	}, w.configTimeoutMS, nil)
+	}, w.configTimeoutMS, &resp); err != nil {
+		return err
+	}
+	if bizErr := resp.bizErr(); bizErr != nil {
+		return fmt.Errorf("wechat sendtyping: %w", bizErr)
+	}
+	return nil
+}
+
+func (w *WechatPersonalChannel) ensureTypingLoop(account *wechatAccountRuntime, userID, contextToken string) error {
+	if account == nil || userID == "" {
+		return nil
+	}
+	account.mu.RLock()
+	existing := account.typingCancels[userID]
+	account.mu.RUnlock()
+	if existing != nil {
+		return nil
+	}
+
+	ctx := w.rootCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ticket, err := w.getTypingTicket(ctx, account, userID, contextToken)
+	if err != nil || ticket == "" {
+		return err
+	}
+	if err := w.sendTyping(ctx, account, userID, ticket, wechatTypingStatusTyping); err != nil {
+		return err
+	}
+
+	loopCtx, cancel := context.WithCancel(ctx)
+	loop := &wechatTypingLoop{cancel: cancel}
+	account.mu.Lock()
+	if account.typingCancels == nil {
+		account.typingCancels = make(map[string]*wechatTypingLoop)
+	}
+	if old := account.typingCancels[userID]; old != nil {
+		account.mu.Unlock()
+		if old.cancel != nil {
+			old.cancel()
+		}
+		account.mu.Lock()
+	}
+	account.typingCancels[userID] = loop
+	account.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(wechatTypingKeepaliveInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-loopCtx.Done():
+				account.mu.Lock()
+				if account.typingCancels[userID] == loop {
+					delete(account.typingCancels, userID)
+				}
+				account.mu.Unlock()
+				return
+			case <-ticker.C:
+				_ = w.sendTyping(loopCtx, account, userID, ticket, wechatTypingStatusTyping)
+			}
+		}
+	}()
+	return nil
+}
+
+func (w *WechatPersonalChannel) stopTypingLoop(account *wechatAccountRuntime, userID string, clearRemote bool) error {
+	if account == nil || userID == "" {
+		return nil
+	}
+	account.mu.Lock()
+	loop := account.typingCancels[userID]
+	delete(account.typingCancels, userID)
+	entry := account.typingTickets[userID]
+	account.mu.Unlock()
+	if loop != nil && loop.cancel != nil {
+		loop.cancel()
+	}
+	if !clearRemote || entry == nil || entry.Ticket == "" {
+		return nil
+	}
+	timeout := w.configTimeoutMS
+	if timeout <= 0 {
+		timeout = wechatDefaultCfgTimeoutMS
+	}
+	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
+	defer cancelCtx()
+	return w.sendTyping(ctx, account, userID, entry.Ticket, wechatTypingStatusCancel)
 }

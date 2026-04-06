@@ -6,6 +6,7 @@ description: Schedule reminders and recurring tasks.
 # Cron
 
 Use the `cron` tool to schedule reminders or recurring tasks.
+For one-time reminders, `message` should be the actual reminder text that should appear at trigger time, not a meta instruction like "set a timer for me".
 
 ## Three Modes
 

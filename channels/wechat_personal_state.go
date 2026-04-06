@@ -93,7 +93,8 @@ func (w *WechatPersonalChannel) saveAccountState(account *wechatAccountRuntime) 
 		LastError:     account.lastError,
 		LastSeenAt:    account.lastSeenAt,
 		LastMessageAt: account.lastMessageAt,
-		TypingTicket:  account.typingTicket,
+		ContextTokens: cloneStringMap(account.contextTokens),
+		TypingTickets: cloneTypingTicketMap(account.typingTickets),
 		UpdatedAt:     time.Now(),
 	}
 	account.mu.RUnlock()
@@ -115,4 +116,30 @@ func (w *WechatPersonalChannel) listAccountIDs() []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return map[string]string{}
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func cloneTypingTicketMap(src map[string]*wechatTypingTicketState) map[string]*wechatTypingTicketState {
+	if len(src) == 0 {
+		return map[string]*wechatTypingTicketState{}
+	}
+	dst := make(map[string]*wechatTypingTicketState, len(src))
+	for key, value := range src {
+		if value == nil {
+			continue
+		}
+		copyValue := *value
+		dst[key] = &copyValue
+	}
+	return dst
 }

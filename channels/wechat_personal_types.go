@@ -9,6 +9,8 @@ const (
 	wechatMessageTypeUser = 1
 	wechatMessageTypeBot  = 2
 
+	wechatMessageStateFinish = 2
+
 	wechatMessageItemText  = 1
 	wechatMessageItemImage = 2
 	wechatMessageItemVoice = 3
@@ -18,6 +20,7 @@ const (
 	wechatMediaTypeImage = 1
 	wechatMediaTypeVideo = 2
 	wechatMediaTypeFile  = 3
+	wechatMediaTypeVoice = 4
 
 	wechatTypingStatusTyping = 1
 	wechatTypingStatusCancel = 2
@@ -31,23 +34,25 @@ type wechatBaseInfo struct {
 // may return inside an HTTP 200 response body. Embed this in any response struct
 // that needs error checking.
 type wechatBaseResponse struct {
-	Ret    int    `json:"ret,omitempty"`
-	ErrMsg string `json:"errmsg,omitempty"`
+	Ret     int    `json:"ret,omitempty"`
+	ErrCode int    `json:"errcode,omitempty"`
+	ErrMsg  string `json:"errmsg,omitempty"`
 }
 
 func (r *wechatBaseResponse) bizErr() error {
-	if r == nil || r.Ret == 0 {
+	if r == nil || (r.Ret == 0 && r.ErrCode == 0) {
 		return nil
 	}
 	msg := r.ErrMsg
 	if msg == "" {
 		msg = "unknown error"
 	}
-	return fmt.Errorf("wechat biz error ret=%d: %s", r.Ret, msg)
+	return fmt.Errorf("wechat biz error ret=%d errcode=%d: %s", r.Ret, r.ErrCode, msg)
 }
 
 type wechatCDNMedia struct {
 	EncryptQueryParam string `json:"encrypt_query_param,omitempty"`
+	FullURL           string `json:"full_url,omitempty"`
 	AESKey            string `json:"aes_key,omitempty"`
 	EncryptType       int    `json:"encrypt_type,omitempty"`
 }
@@ -65,8 +70,12 @@ type wechatImageItem struct {
 }
 
 type wechatVoiceItem struct {
-	Media *wechatCDNMedia `json:"media,omitempty"`
-	Text  string          `json:"text,omitempty"`
+	Media         *wechatCDNMedia `json:"media,omitempty"`
+	EncodeType    int             `json:"encode_type,omitempty"`
+	BitsPerSample int             `json:"bits_per_sample,omitempty"`
+	SampleRate    int             `json:"sample_rate,omitempty"`
+	Playtime      int             `json:"playtime,omitempty"`
+	Text          string          `json:"text,omitempty"`
 }
 
 type wechatFileItem struct {
@@ -147,6 +156,7 @@ type wechatGetUploadURLRequest struct {
 type wechatGetUploadURLResponse struct {
 	wechatBaseResponse
 	UploadParam      string `json:"upload_param,omitempty"`
+	UploadFullURL    string `json:"upload_full_url,omitempty"`
 	ThumbUploadParam string `json:"thumb_upload_param,omitempty"`
 }
 
@@ -157,9 +167,19 @@ type wechatGetConfigRequest struct {
 }
 
 type wechatGetConfigResponse struct {
-	Ret          int    `json:"ret,omitempty"`
-	ErrMsg       string `json:"errmsg,omitempty"`
+	wechatBaseResponse
 	TypingTicket string `json:"typing_ticket,omitempty"`
+}
+
+type wechatSendMessageResponse struct {
+	wechatBaseResponse
+}
+
+type wechatTypingTicketState struct {
+	Ticket        string    `json:"ticket,omitempty"`
+	NextFetchAt   time.Time `json:"next_fetch_at,omitempty"`
+	RetryDelayS   int       `json:"retry_delay_s,omitempty"`
+	EverSucceeded bool      `json:"ever_succeeded,omitempty"`
 }
 
 type wechatSendTypingRequest struct {
@@ -183,20 +203,21 @@ type wechatQRCodeStatusResponse struct {
 }
 
 type wechatPersistedAccountState struct {
-	AccountID     string    `json:"account_id"`
-	Token         string    `json:"token,omitempty"`
-	ILinkUserID   string    `json:"ilink_user_id,omitempty"`
-	ILinkBotID    string    `json:"ilink_bot_id,omitempty"`
-	BaseURL       string    `json:"base_url,omitempty"`
-	CDNBaseURL    string    `json:"cdn_base_url,omitempty"`
-	BotType       string    `json:"bot_type,omitempty"`
-	GetUpdatesBuf string    `json:"get_updates_buf,omitempty"`
-	PausedUntil   time.Time `json:"paused_until,omitempty"`
-	LastError     string    `json:"last_error,omitempty"`
-	LastSeenAt    time.Time `json:"last_seen_at,omitempty"`
-	LastMessageAt time.Time `json:"last_message_at,omitempty"`
-	TypingTicket  string    `json:"typing_ticket,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+	AccountID     string                              `json:"account_id"`
+	Token         string                              `json:"token,omitempty"`
+	ILinkUserID   string                              `json:"ilink_user_id,omitempty"`
+	ILinkBotID    string                              `json:"ilink_bot_id,omitempty"`
+	BaseURL       string                              `json:"base_url,omitempty"`
+	CDNBaseURL    string                              `json:"cdn_base_url,omitempty"`
+	BotType       string                              `json:"bot_type,omitempty"`
+	GetUpdatesBuf string                              `json:"get_updates_buf,omitempty"`
+	PausedUntil   time.Time                           `json:"paused_until,omitempty"`
+	LastError     string                              `json:"last_error,omitempty"`
+	LastSeenAt    time.Time                           `json:"last_seen_at,omitempty"`
+	LastMessageAt time.Time                           `json:"last_message_at,omitempty"`
+	ContextTokens map[string]string                   `json:"context_tokens,omitempty"`
+	TypingTickets map[string]*wechatTypingTicketState `json:"typing_tickets,omitempty"`
+	UpdatedAt     time.Time                           `json:"updated_at,omitempty"`
 }
 
 type wechatLoginSession struct {
@@ -218,4 +239,36 @@ type wechatAccountStatus struct {
 	LastError     string    `json:"last_error,omitempty"`
 	LastSeenAt    time.Time `json:"last_seen_at,omitempty"`
 	LastMessageAt time.Time `json:"last_message_at,omitempty"`
+}
+
+func wechatMediaTypeName(mediaType int) string {
+	switch mediaType {
+	case wechatMediaTypeImage:
+		return "image"
+	case wechatMediaTypeVideo:
+		return "video"
+	case wechatMediaTypeVoice:
+		return "voice"
+	case wechatMediaTypeFile:
+		return "file"
+	default:
+		return fmt.Sprintf("unknown(%d)", mediaType)
+	}
+}
+
+func wechatMessageItemTypeName(itemType int) string {
+	switch itemType {
+	case wechatMessageItemText:
+		return "text"
+	case wechatMessageItemImage:
+		return "image"
+	case wechatMessageItemVoice:
+		return "voice"
+	case wechatMessageItemFile:
+		return "file"
+	case wechatMessageItemVideo:
+		return "video"
+	default:
+		return fmt.Sprintf("unknown(%d)", itemType)
+	}
 }

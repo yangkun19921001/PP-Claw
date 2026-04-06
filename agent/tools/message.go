@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/yangkun19921001/PP-Claw/bus"
 )
@@ -60,6 +61,21 @@ func (t *MessageTool) StartTurn() {
 	t.SentInTurn = false
 }
 
+func normalizeMessageChannel(requested, current string) string {
+	requested = strings.TrimSpace(strings.ToLower(requested))
+	current = strings.TrimSpace(strings.ToLower(current))
+	if requested == "" {
+		return current
+	}
+	if current == "wechat_personal" {
+		switch requested {
+		case "wechat", "weixin", "wechat_personal":
+			return current
+		}
+	}
+	return requested
+}
+
 func (t *MessageTool) Execute(ctx context.Context, params map[string]any) (string, error) {
 	content, _ := params["content"].(string)
 	if content == "" {
@@ -68,9 +84,7 @@ func (t *MessageTool) Execute(ctx context.Context, params map[string]any) (strin
 
 	channel, _ := params["channel"].(string)
 	chatID, _ := params["chat_id"].(string)
-	if channel == "" {
-		channel = t.channel
-	}
+	channel = normalizeMessageChannel(channel, t.channel)
 	if chatID == "" {
 		chatID = t.chatID
 	}

@@ -279,6 +279,11 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 			mt.SetReplyTo(replyTo)
 		}
 	}
+	if t := env.Tools.Get("cron"); t != nil {
+		if ct, ok := t.(*tools.CronTool); ok {
+			ct.StartTurn()
+		}
+	}
 
 	// Handle system messages
 	if msg.Channel == "system" {
@@ -446,6 +451,18 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 	if finalContent == "" {
 		finalContent = "I've completed processing but have no response to give."
 	}
+	if shouldBlockHallucinatedCronSuccess(msg.Content, finalContent, env) {
+		logger.Warn("消息链路: 拦截未实际创建的定时任务成功回复",
+			zap.String("trace_id", traceID),
+			zap.String("channel", msg.Channel),
+			zap.String("chat_id", msg.ChatID),
+			zap.String("sender_id", msg.SenderID),
+			zap.String("user_content", msg.Content),
+			zap.String("assistant_content", finalContent),
+		)
+		finalContent = "这次没有实际创建定时任务：本轮没有调用 cron 工具，所以任务不会入库，也不会触发。请重试，我会直接用 cron 工具创建。"
+		finishReason = "cron_tool_missing"
+	}
 
 	responsePreview := finalContent
 	if len(responsePreview) > 200 {
@@ -495,6 +512,57 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 	result = "final_response_ready"
 	response = out
 	return response, nil
+}
+
+func shouldBlockHallucinatedCronSuccess(userContent, assistantContent string, env *AgentEnv) bool {
+	if !looksLikeCronRequest(userContent) || !looksLikeCronSuccessReply(assistantContent) {
+		return false
+	}
+	t := env.Tools.Get("cron")
+	if t == nil {
+		return true
+	}
+	ct, ok := t.(*tools.CronTool)
+	if !ok {
+		return true
+	}
+	return !ct.UsedInTurn
+}
+
+func looksLikeCronRequest(content string) bool {
+	content = strings.ToLower(strings.TrimSpace(content))
+	if content == "" {
+		return false
+	}
+	keywords := []string{
+		"定时", "定时器", "定时任务", "提醒我", "提醒", "分钟后", "小时后", "后推送", "后提醒",
+		"schedule", "scheduled", "remind me", "reminder", "timer", "cron",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(content, kw) {
+			return true
+		}
+	}
+	timeLike := regexp.MustCompile(`\b\d{1,2}:\d{2}\b|[0-9一二三四五六七八九十两]+分钟后|[0-9一二三四五六七八九十两]+小时后`)
+	return timeLike.MatchString(content) &&
+		(strings.Contains(content, "任务") || strings.Contains(content, "提醒") || strings.Contains(content, "推送"))
+}
+
+func looksLikeCronSuccessReply(content string) bool {
+	content = strings.ToLower(strings.TrimSpace(content))
+	if content == "" {
+		return false
+	}
+	phrases := []string{
+		"已成功设置", "任务已成功设置", "定时任务已成功设置", "定时器测试任务已成功设置",
+		"提醒已设置", "已为你设置", "created job", "scheduled", "任务已重新设置",
+	}
+	for _, phrase := range phrases {
+		if strings.Contains(content, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // handleStop cancels all active tasks for the session.
