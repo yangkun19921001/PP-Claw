@@ -1,0 +1,21 @@
+[Unit]
+Description=PP-Claw Gateway Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ppclaw
+Group=ppclaw
+WorkingDirectory=/opt/pp-claw
+Environment=HOME=/home/ppclaw
+Environment=TZ=Asia/Shanghai
+ExecStart=/opt/pp-claw/pp-claw gateway 
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

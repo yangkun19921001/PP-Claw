@@ -234,10 +234,20 @@ func (s *Service) onTimer() {
 	defer s.mu.Unlock()
 
 	now := nowMs()
+	var dueJobIDs []string
 	for i := range s.store.Jobs {
 		j := &s.store.Jobs[i]
 		if j.Enabled && j.State.NextRunAtMs > 0 && now >= j.State.NextRunAtMs {
-			s.executeJob(j)
+			dueJobIDs = append(dueJobIDs, j.ID)
+		}
+	}
+
+	for _, jobID := range dueJobIDs {
+		for i := range s.store.Jobs {
+			if s.store.Jobs[i].ID == jobID {
+				s.executeJob(&s.store.Jobs[i])
+				break
+			}
 		}
 	}
 	s.saveStore()
