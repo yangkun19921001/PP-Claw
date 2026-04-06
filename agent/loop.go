@@ -556,6 +556,7 @@ func looksLikeCronSuccessReply(content string) bool {
 	phrases := []string{
 		"已成功设置", "任务已成功设置", "定时任务已成功设置", "定时器测试任务已成功设置",
 		"提醒已设置", "已为你设置", "created job", "scheduled", "任务已重新设置",
+		"任务已创建", "定时任务已创建", "提醒已创建", "创建成功", "已创建任务",
 	}
 	for _, phrase := range phrases {
 		if strings.Contains(content, phrase) {
@@ -730,6 +731,11 @@ func runWithADK(ctx context.Context, env *AgentEnv, messages []*schema.Message, 
 	iter := env.ADKRunner.Run(ctx, messages)
 	traceID := traceIDFromContext(ctx)
 
+	logger.Info("ADK request snapshot",
+		zap.String("trace_id", traceID),
+		zap.Any("messages", buildFullModelInputSnapshot(messages)),
+	)
+
 	var lastContent string
 	finishReason := "ok"
 
@@ -790,6 +796,10 @@ func runWithADK(ctx context.Context, env *AgentEnv, messages []*schema.Message, 
 			zap.Int("tool_calls", len(msg.ToolCalls)),
 			zap.Int("content_length", len(msg.Content)),
 			zap.String("content_preview", contentPreview),
+		)
+		logger.Info("ADK raw event",
+			zap.String("trace_id", traceID),
+			zap.Any("event", buildADKEventSnapshot(event, mv, msg)),
 		)
 
 		switch role {
@@ -1104,6 +1114,80 @@ func buildModelInputSnapshot(messages []*schema.Message) []map[string]any {
 		}
 
 		snapshot = append(snapshot, item)
+	}
+	return snapshot
+}
+
+func buildFullModelInputSnapshot(messages []*schema.Message) []map[string]any {
+	snapshot := make([]map[string]any, 0, len(messages))
+	for i, msg := range messages {
+		if msg == nil {
+			snapshot = append(snapshot, map[string]any{
+				"index": i,
+				"nil":   true,
+			})
+			continue
+		}
+
+		item := map[string]any{
+			"index":             i,
+			"role":              msg.Role,
+			"content":           msg.Content,
+			"content_length":    len(msg.Content),
+			"tool_call_id":      msg.ToolCallID,
+			"tool_name":         msg.ToolName,
+			"reasoning_content": msg.ReasoningContent,
+		}
+		if len(msg.ToolCalls) > 0 {
+			item["tool_calls"] = buildToolCallSnapshot(msg.ToolCalls)
+		}
+		if len(msg.MultiContent) > 0 {
+			partTypes := make([]string, 0, len(msg.MultiContent))
+			for _, part := range msg.MultiContent {
+				partTypes = append(partTypes, string(part.Type))
+			}
+			item["multi_content_types"] = partTypes
+		}
+		snapshot = append(snapshot, item)
+	}
+	return snapshot
+}
+
+func buildADKEventSnapshot(event any, mv any, msg *schema.Message) map[string]any {
+	snapshot := map[string]any{
+		"event_type": fmt.Sprintf("%T", event),
+		"variant":    fmt.Sprintf("%T", mv),
+	}
+	if msg == nil {
+		snapshot["message_nil"] = true
+		return snapshot
+	}
+
+	snapshot["message"] = map[string]any{
+		"role":              msg.Role,
+		"content":           msg.Content,
+		"content_length":    len(msg.Content),
+		"tool_call_id":      msg.ToolCallID,
+		"tool_name":         msg.ToolName,
+		"reasoning_content": msg.ReasoningContent,
+		"tool_calls":        buildToolCallSnapshot(msg.ToolCalls),
+	}
+	return snapshot
+}
+
+func buildToolCallSnapshot(toolCalls []schema.ToolCall) []map[string]any {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+	snapshot := make([]map[string]any, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		snapshot = append(snapshot, map[string]any{
+			"id":        tc.ID,
+			"type":      tc.Type,
+			"index":     tc.Index,
+			"function":  tc.Function.Name,
+			"arguments": tc.Function.Arguments,
+		})
 	}
 	return snapshot
 }

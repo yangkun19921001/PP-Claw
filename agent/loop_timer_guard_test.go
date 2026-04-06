@@ -26,6 +26,7 @@ func TestLooksLikeCronSuccessReply(t *testing.T) {
 	}{
 		{input: "## 🎯 **14:35定时任务已成功设置！**", want: true},
 		{input: "Created job 'reminder' (id: abc123)", want: true},
+		{input: "### 最终状态：\n- 任务ID：b8c3d7f4\n- 推送时间：21:26\n- 状态：✅ 任务已创建\n\n定时任务已创建，等待21:26推送。", want: true},
 		{input: "我还没有创建任务，需要再确认一下时间。", want: false},
 	}
 
