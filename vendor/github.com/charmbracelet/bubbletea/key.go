@@ -235,7 +235,6 @@ const (
 	KeyCtrlShiftRight
 	KeyCtrlShiftHome
 	KeyCtrlShiftEnd
-	KeyShiftEnter
 	KeyF1
 	KeyF2
 	KeyF3
@@ -329,7 +328,6 @@ var keyNames = map[KeyType]string{
 	KeyCtrlShiftDown:  "ctrl+shift+down",
 	KeyCtrlShiftLeft:  "ctrl+shift+left",
 	KeyCtrlShiftRight: "ctrl+shift+right",
-	KeyShiftEnter:     "shift+enter",
 	KeyF1:             "f1",
 	KeyF2:             "f2",
 	KeyF3:             "f3",
@@ -401,10 +399,6 @@ var sequences = map[string]Key{
 	"\x1b[1;8B": {Type: KeyCtrlShiftDown, Alt: true},
 	"\x1b[1;8C": {Type: KeyCtrlShiftRight, Alt: true},
 	"\x1b[1;8D": {Type: KeyCtrlShiftLeft, Alt: true},
-
-	// Shift+Enter (Kitty keyboard protocol & xterm modifyOtherKeys)
-	"\x1b[13;2u":    {Type: KeyShiftEnter},
-	"\x1b[27;2;13~": {Type: KeyShiftEnter},
 
 	// Miscellaneous keys
 	"\x1b[Z": {Type: KeyShiftTab},

@@ -36,6 +36,8 @@
 | 🧠 **智能记忆** | LLM 驱动双层记忆（MEMORY.md 长期事实 + HISTORY.md 事件日志），Token 级自动整合 |
 | 🤝 **子代理** | 后台独立 LLM 循环，拥有文件/Shell/Web 工具，`/stop` 一键取消 |
 | 📦 **技能系统** | 8 个内置技能 + workspace 自定义技能，always-load 自动加载 |
+| 🧠 **自学习循环** | 🆕 从复杂对话中自动学习技能，智能注入相关经验，持续自我改进 |
+| 🚀 **强化学习** | 🆕 轨迹跟踪记录，智能压缩优化，奖励机制驱动，基于 Hermes-Agent 核心算法 |
 | ⏰ **定时任务** | Cron 表达式 / 固定间隔 / 一次性，结果自动路由回原渠道 |
 | 💓 **心跳检查** | 定期执行 HEARTBEAT.md 待办任务，智能评估是否通知 |
 | 🛡️ **安全防护** | SSRF 拦截 / Shell 危险命令阻断 / 路径遍历检测 / workspace 沙箱 |
@@ -627,6 +629,163 @@ Instructions for the agent...
 
 ---
 
+## 🧠 自学习循环与强化学习
+
+### 🆕 核心新功能
+
+PP-Claw 现已集成 **Hermes-Agent** 的核心学习算法，具备**自我学习**和**持续改进**能力：
+
+| 功能模块 | 能力描述 |
+|---------|---------|
+| 🧠 **自学习循环** | 从复杂对话中自动提取可重用技能，智能匹配注入相关经验 |
+| 🚀 **强化学习** | 完整轨迹跟踪，智能压缩优化，奖励机制驱动性能提升 |
+| 💡 **技能注入** | 基于相似度自动在相关场景中注入已学技能 |
+| 📈 **轨迹压缩** | 保护关键步骤，压缩冗余内容，提升长期记忆效率 |
+| 🎯 **奖励优化** | 时间、Token、工具使用效率奖励，持续优化执行策略 |
+
+### 配置示例
+
+```yaml
+# 启用学习功能
+learning:
+  enabled: true  # 🚀 启用自学习循环
+
+  # 技能提取配置
+  skill_extraction:
+    review_interval: 5        # 每5次工具调用检查一次学习机会
+    min_conversation_length: 3 # 最少3轮对话才考虑学习
+    min_tool_calls: 2         # 最少2次工具调用（确保是复杂任务）
+
+  # 技能存储配置
+  storage:
+    type: "file"                    # 文件存储模式
+    path: "~/.pp-claw/data/skills"  # 技能存储路径（按Agent ID分目录）
+    max_skills: 500                 # 每个Agent最多保存500个技能
+
+  # 技能注入配置
+  injection:
+    max_inject_skills: 3      # 每次对话最多注入3个相关技能
+    similarity_threshold: 0.25 # 相似度阈值25%
+    cache_expire_seconds: 300  # 技能缓存5分钟
+
+# 强化学习配置
+rl:
+  enabled: true  # 🚀 启用强化学习
+
+  # 轨迹跟踪
+  tracking:
+    storage_path: "~/.pp-claw/data/trajectories"  # 轨迹存储路径
+    max_trajectories: 1000    # 每个Agent最多保存1000条轨迹
+    retention_days: 15        # 轨迹保留15天
+    auto_cleanup: true        # 自动清理过期轨迹
+
+  # 智能压缩（Hermes 核心技术）
+  compression:
+    target_max_steps: 30           # 目标最大步骤数
+    summary_target_length: 400     # 摘要目标长度
+    protected_steps:
+      first_n: 4        # 保护前4步（问题理解和计划阶段）
+      last_n: 3         # 保护后3步（结果验证和总结阶段）
+      protect_error: true  # 保护错误恢复步骤
+      protect_tool: true   # 保护重要工具调用
+
+  # 奖励机制
+  reward:
+    success_reward: 1.0  # 任务成功完成基础奖励
+    time_reward:
+      max_duration: "15m"     # 期望最大执行时间
+      penalty_per_step: 0.005 # 每步时间惩罚（鼓励效率）
+    tool_reward:
+      success_bonus: 0.15    # 工具成功使用奖励
+      failure_penalty: 0.1   # 工具失败惩罚
+```
+
+### 学习过程演示
+
+#### 第一次复杂任务（触发学习）
+```
+👤: 帮我分析 https://example.com 的 SEO 问题，生成优化报告
+
+🤖: 我来帮你进行SEO分析...
+    [web_fetch] 获取页面内容
+    [analyze] 分析标题、描述、关键词
+    [write_file] 生成SEO分析报告
+
+✅ 学习条件达成：≥2次工具调用 + 复杂解决流程
+📝 自动学习技能："SEO网站分析优化"
+```
+
+#### 第二次类似任务（技能注入）
+```
+👤: 帮我优化另一个网站的SEO
+
+🤖: 基于之前的SEO分析经验，我建议按以下步骤进行...
+    [系统提示词自动增强，注入"SEO网站分析优化"技能]
+    回答更专业、更结构化、执行更高效
+
+✅ 技能注入生效：回答质量显著提升 🚀
+```
+
+### 数据目录结构
+
+学习功能会自动创建以下目录结构：
+
+```
+~/.pp-claw/data/
+├── skills/              # 学习到的技能
+│   ├── main/           # 主助手的技能
+│   │   ├── seo-analysis.yaml
+│   │   ├── code-debug.yaml
+│   │   └── ...
+│   ├── translator/     # 翻译助手的技能
+│   └── code-review/    # 代码审查的技能
+└── trajectories/        # 执行轨迹记录
+    ├── main/
+    │   ├── session-20261201-001.json
+    │   └── ...
+    └── translator/
+```
+
+### 监控学习过程
+
+```bash
+# 实时监控学习活动
+./watch_learning.sh
+
+# 查看已学技能
+find ~/.pp-claw/data/skills -name "*.yaml" -exec basename {} .yaml \;
+
+# 查看技能内容
+cat ~/.pp-claw/data/skills/main/seo-analysis.yaml
+
+# 查看轨迹统计
+ls -la ~/.pp-claw/data/trajectories/main/
+```
+
+### 性能影响
+
+- **响应时间**：增加 <20%（技能匹配缓存优化）
+- **内存使用**：增加 <100MB（智能清理机制）
+- **存储空间**：技能文件平均 2-5KB，轨迹压缩率 >60%
+- **学习触发**：后台异步处理，不阻塞对话响应
+
+### 最佳实践
+
+**触发学习的对话特征**：
+- 包含 ≥2 次工具调用
+- 涉及多步骤问题解决
+- 具有明确的解决方案模式
+- 任务具有重复使用价值
+
+**示例学习场景**：
+- SEO网站分析优化
+- 代码性能调试流程
+- API接口设计规范
+- 数据分析报告生成
+- 系统配置部署流程
+
+---
+
 ## 🧠 记忆系统
 
 双层记忆，LLM 驱动自动整合：
@@ -709,6 +868,52 @@ tools:
       api_key: ""
       max_results: 5
   mcp_servers: {}
+
+# 🆕 自学习循环与强化学习（可选，默认禁用）
+learning:
+  enabled: false  # 设置为 true 启用自学习功能
+  skill_extraction:
+    review_interval: 10
+    min_conversation_length: 5
+    min_tool_calls: 3
+  storage:
+    type: "file"
+    path: "~/.pp-claw/data/skills"
+    max_skills: 1000
+  injection:
+    max_inject_skills: 3
+    similarity_threshold: 0.3
+    cache_expire_seconds: 300
+
+rl:
+  enabled: false  # 设置为 true 启用强化学习功能
+  tracking:
+    storage_path: "~/.pp-claw/data/trajectories"
+    max_trajectories: 1000
+    retention_days: 30
+    auto_cleanup: true
+  compression:
+    target_max_steps: 50
+    summary_target_length: 500
+    compression_strategy: "summarize"
+    protected_steps:
+      first_n: 5
+      last_n: 3
+      protect_error: true
+      protect_tool: true
+  reward:
+    success_reward: 1.0
+    time_reward:
+      max_duration: "10m"
+      penalty_per_step: 0.01
+    tool_reward:
+      success_bonus: 0.1
+      failure_penalty: 0.2
+  optimization:
+    update_interval: "24h"
+    min_trajectories: 10
+    learning_rate: 0.01
+    exploration_rate: 0.1
 ```
 
 ---

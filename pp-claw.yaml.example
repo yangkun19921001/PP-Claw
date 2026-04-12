@@ -375,3 +375,87 @@ tools:
         chrome-devtools:
             command: "npx"
             args: ["chrome-devtools-mcp@latest", "--autoConnect"]
+
+# 🆕 自学习循环与强化学习功能（基于 Hermes-Agent 核心算法）
+# 启用后，Agent 将从复杂对话中自动学习技能，并在相关场景中智能注入
+learning:
+    enabled: false  # 设置为 true 启用自学习功能
+
+    # 技能提取配置：从复杂对话中自动学习可重用技能
+    skill_extraction:
+        review_interval: 10        # 每N次工具调用触发一次技能审查
+        min_conversation_length: 5 # 最小对话长度（轮次）
+        min_tool_calls: 3         # 最小工具调用次数（确保任务复杂度）
+        extractor_model: ""       # 技能提取模型（空则使用Agent默认模型）
+        review_prompt: ""         # 自定义审查提示词（空则使用内置）
+
+    # 技能存储配置
+    storage:
+        type: "file"                    # 存储类型：file, sqlite（未来支持）
+        path: "~/.pp-claw/data/skills"  # 技能存储路径（按Agent ID分目录）
+        max_skills: 1000               # 每个Agent最大技能数量
+
+    # 技能注入配置：在相关场景中自动注入学习到的技能
+    injection:
+        max_inject_skills: 3      # 每次对话最多注入技能数量
+        similarity_threshold: 0.3  # 相似度阈值（0-1，值越低匹配越宽松）
+        cache_expire_seconds: 300  # 技能缓存过期时间（秒）
+        enable_semantic_match: false # 是否启用语义匹配（需要向量数据库）
+
+# 🆕 强化学习功能：轨迹跟踪、压缩优化、奖励机制
+rl:
+    enabled: false  # 设置为 true 启用强化学习功能
+
+    # 轨迹跟踪配置：完整记录执行过程用于学习优化
+    tracking:
+        storage_path: "~/.pp-claw/data/trajectories"  # 轨迹存储路径
+        max_trajectories: 1000    # 每个Agent最大轨迹数量
+        retention_days: 30        # 轨迹保留天数
+        auto_cleanup: true        # 自动清理过期轨迹
+        flush_interval: "5m"      # 数据刷新间隔
+
+    # 轨迹压缩配置：Hermes 核心技术，智能保护重要步骤
+    compression:
+        target_max_steps: 50           # 压缩后目标最大步骤数
+        summary_target_length: 500     # 摘要目标长度（字符）
+        compression_strategy: "summarize" # 压缩策略：summarize, merge, skip
+        model_name: ""                 # 压缩模型（空则使用默认）
+        min_compression_ratio: 0.3     # 最小压缩比率
+
+        # 保护步骤策略（对应 Hermes 的保护机制）
+        protected_steps:
+            first_n: 5        # 保护前N步（问题理解和计划阶段）
+            last_n: 3         # 保护后N步（结果验证和总结阶段）
+            protect_error: true  # 保护错误恢复步骤
+            protect_tool: true   # 保护重要工具调用
+
+    # 奖励计算配置：优化Agent行为表现
+    reward:
+        success_reward: 1.0  # 任务成功完成基础奖励
+
+        # 时间效率奖励
+        time_reward:
+            max_duration: "10m"     # 期望最大执行时间
+            penalty_per_step: 0.01  # 每步时间惩罚
+
+        # Token使用效率奖励
+        token_reward:
+            max_tokens: 10000       # 期望最大token使用量
+            penalty_per_token: 0.0001 # 每token惩罚
+
+        # 工具使用奖励
+        tool_reward:
+            success_bonus: 0.1    # 工具成功使用奖励
+            failure_penalty: 0.2  # 工具失败惩罚
+
+        # 错误处理奖励
+        error_reward:
+            recovery_bonus: 0.3     # 错误恢复奖励
+            repeated_penalty: 0.5   # 重复错误惩罚
+
+    # 策略优化配置：持续改进Agent表现
+    optimization:
+        update_interval: "24h"    # 策略更新间隔
+        min_trajectories: 10      # 开始优化的最小轨迹数量
+        learning_rate: 0.01       # 学习率
+        exploration_rate: 0.1     # 探索率
