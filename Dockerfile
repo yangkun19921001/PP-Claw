@@ -14,21 +14,35 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/pp-claw .
 
 # ============================================================
-# Stage 2: Runtime
+# Stage 2: Node Runtime
+# ============================================================
+FROM node:20-bookworm-slim AS node_runtime
+
+# ============================================================
+# Stage 3: Runtime
 # ============================================================
 FROM debian:bookworm-slim
 
-# Install base packages
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Use domestic Debian mirrors to reduce network failures during image builds.
+RUN rm -f /etc/apt/sources.list.d/* /etc/apt/sources.list \
+    && printf '%s\n' \
+    'deb http://mirrors.tuna.tsinghua.edu.cn/debian bookworm main contrib non-free non-free-firmware' \
+    'deb http://mirrors.tuna.tsinghua.edu.cn/debian bookworm-updates main contrib non-free non-free-firmware' \
+    'deb http://mirrors.tuna.tsinghua.edu.cn/debian-security bookworm-security main contrib non-free non-free-firmware' \
+    > /etc/apt/sources.list \
+    && apt-get update -o Acquire::Retries=3 \
+    && apt-get install -y --no-install-recommends \
     ca-certificates \
     tzdata \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 20 (required by edge-tts skill)
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Copy Node.js 20 runtime from the official Node image to avoid extra apt repos.
+COPY --from=node_runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node_runtime /usr/local/bin/npm /usr/local/bin/npm
+COPY --from=node_runtime /usr/local/bin/npx /usr/local/bin/npx
+COPY --from=node_runtime /usr/local/bin/corepack /usr/local/bin/corepack
+COPY --from=node_runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 # Timezone
 ENV TZ=Asia/Shanghai
