@@ -222,23 +222,14 @@ func GetDefaultRLConfig() *RLConfig {
 	}
 }
 
-// ConfigWithLearning 扩展的配置结构体
-// 向后兼容地添加学习功能配置
-type ConfigWithLearning struct {
-	*Config                         // 嵌入现有配置
-	Learning *LearningConfig `yaml:"learning,omitempty"` // 学习配置（可选）
-	RL       *RLConfig       `yaml:"rl,omitempty"`       // 强化学习配置（可选）
-}
-
 // ResolveSkillsPath 解析技能存储路径
-func (c *ConfigWithLearning) ResolveSkillsPath(agentID string) string {
+func (c *Config) ResolveSkillsPath(agentID string) string {
 	if c.Learning == nil || c.Learning.Storage.Path == "" {
 		return filepath.Join("./skills", agentID)
 	}
 
 	path := c.Learning.Storage.Path
 	if !filepath.IsAbs(path) {
-		// 相对路径基于配置文件目录
 		path = filepath.Join(".", path)
 	}
 
@@ -246,14 +237,13 @@ func (c *ConfigWithLearning) ResolveSkillsPath(agentID string) string {
 }
 
 // ResolveTrajectoriesPath 解析轨迹存储路径
-func (c *ConfigWithLearning) ResolveTrajectoriesPath(agentID string) string {
+func (c *Config) ResolveTrajectoriesPath(agentID string) string {
 	if c.RL == nil || c.RL.Tracking.StoragePath == "" {
 		return filepath.Join("./trajectories", agentID)
 	}
 
 	path := c.RL.Tracking.StoragePath
 	if !filepath.IsAbs(path) {
-		// 相对路径基于配置文件目录
 		path = filepath.Join(".", path)
 	}
 
@@ -261,22 +251,22 @@ func (c *ConfigWithLearning) ResolveTrajectoriesPath(agentID string) string {
 }
 
 // IsLearningEnabled 检查学习功能是否启用
-func (c *ConfigWithLearning) IsLearningEnabled() bool {
+func (c *Config) IsLearningEnabled() bool {
 	return c.Learning != nil && c.Learning.Enabled
 }
 
 // IsRLEnabled 检查强化学习功能是否启用
-func (c *ConfigWithLearning) IsRLEnabled() bool {
+func (c *Config) IsRLEnabled() bool {
 	return c.RL != nil && c.RL.Enabled
 }
 
 // IsAnyLearningEnabled 检查是否有任何学习功能启用
-func (c *ConfigWithLearning) IsAnyLearningEnabled() bool {
+func (c *Config) IsAnyLearningEnabled() bool {
 	return c.IsLearningEnabled() || c.IsRLEnabled()
 }
 
 // GetLearningConfig 获取学习配置，如果为空则返回默认值
-func (c *ConfigWithLearning) GetLearningConfig() *LearningConfig {
+func (c *Config) GetLearningConfig() *LearningConfig {
 	if c.Learning == nil {
 		return GetDefaultLearningConfig()
 	}
@@ -284,7 +274,7 @@ func (c *ConfigWithLearning) GetLearningConfig() *LearningConfig {
 }
 
 // GetRLConfig 获取强化学习配置，如果为空则返回默认值
-func (c *ConfigWithLearning) GetRLConfig() *RLConfig {
+func (c *Config) GetRLConfig() *RLConfig {
 	if c.RL == nil {
 		return GetDefaultRLConfig()
 	}

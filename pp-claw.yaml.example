@@ -379,7 +379,7 @@ tools:
 # 🆕 自学习循环与强化学习功能（基于 Hermes-Agent 核心算法）
 # 启用后，Agent 将从复杂对话中自动学习技能，并在相关场景中智能注入
 learning:
-    enabled: false  # 设置为 true 启用自学习功能
+    enabled: true  # 设置为 true 启用自学习功能
 
     # 技能提取配置：从复杂对话中自动学习可重用技能
     skill_extraction:
@@ -404,7 +404,7 @@ learning:
 
 # 🆕 强化学习功能：轨迹跟踪、压缩优化、奖励机制
 rl:
-    enabled: false  # 设置为 true 启用强化学习功能
+    enabled: true  # 设置为 true 启用强化学习功能
 
     # 轨迹跟踪配置：完整记录执行过程用于学习优化
     tracking:

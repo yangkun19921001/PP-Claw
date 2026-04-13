@@ -38,6 +38,7 @@ type AgentEnv struct {
 	Subagents  *SubagentManager
 	Memory     *MemoryStore
 	MCPManager *tools.MCPManager
+	Learning   *LearningIntegration
 
 	ChatModel einomodel.ToolCallingChatModel
 	ADKAgent  adk.Agent
@@ -302,6 +303,24 @@ func (p *AgentEnvPool) createEnv(agentID string) (*AgentEnv, error) {
 		return nil, fmt.Errorf("初始化 agent %q ADK 失败: %w", agentID, err)
 	}
 
+	// 初始化自学习集成（配置启用时）
+	if p.cfg.IsLearningEnabled() && p.cfg.IsRLEnabled() {
+		li, err := NewLearningIntegration(env, p.logger, &LearningIntegrationConfig{
+			LearningConfig:   p.cfg.GetLearningConfig(),
+			RLConfig:         p.cfg.GetRLConfig(),
+			SkillsPath:       p.cfg.ResolveSkillsPath(agentID),
+			TrajectoriesPath: p.cfg.ResolveTrajectoriesPath(agentID),
+		})
+		if err != nil {
+			p.logger.Warn("初始化自学习集成失败，跳过",
+				zap.String("agent_id", agentID),
+				zap.Error(err),
+			)
+		} else {
+			env.Learning = li
+		}
+	}
+
 	p.logger.Info("AgentEnv 创建完成",
 		zap.String("agent_id", agentID),
 		zap.String("workspace", workspace),
@@ -319,6 +338,9 @@ func (p *AgentEnvPool) Close() {
 	defer p.mu.Unlock()
 
 	for id, env := range p.envs {
+		if env.Learning != nil {
+			env.Learning.Shutdown()
+		}
 		env.CloseMCP()
 		p.logger.Info("AgentEnv 已关闭", zap.String("agent_id", id))
 	}
@@ -381,7 +403,7 @@ func (p *AgentEnvPool) Delegate(ctx context.Context, targetAgentID, task string)
 	}
 
 	// 同步执行目标 Agent 的 ADK Runner
-	content, _, err := runWithADK(ctx, env, messages, nil, p.logger)
+	content, _, err := runWithADK(ctx, env, "", messages, nil, p.logger)
 	if err != nil {
 		return "", fmt.Errorf("delegation to %q failed: %w", targetAgentID, err)
 	}

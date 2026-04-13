@@ -14,6 +14,7 @@ import (
 	"github.com/yangkun19921001/PP-Claw/bus"
 	"github.com/yangkun19921001/PP-Claw/config"
 	"github.com/yangkun19921001/PP-Claw/cron"
+	"github.com/yangkun19921001/PP-Claw/rl"
 	"github.com/yangkun19921001/PP-Claw/session"
 	"go.uber.org/zap"
 )
@@ -318,6 +319,11 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 	// 获取/创建 Session
 	sess := env.Sessions.GetOrCreate(sessionKey)
 
+	// 开始自学习会话跟踪
+	if env.Learning != nil {
+		_ = env.Learning.BeginConversationTracking(ctx, sessionKey, env.AgentID)
+	}
+
 	// 构建消息上下文
 	history := sess.GetHistory(env.MemoryWindow)
 	logger.Info("消息链路: 会话上下文准备完成",
@@ -331,6 +337,10 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 	var einoMsgs []*schema.Message
 
 	sysPrompt := env.Context.BuildSystemPrompt()
+	// 注入已学习的技能到系统提示词
+	if env.Learning != nil {
+		sysPrompt, _ = env.Learning.EnhanceSystemPrompt(ctx, env.AgentID, sysPrompt, msg.Content)
+	}
 	einoMsgs = append(einoMsgs, &schema.Message{
 		Role:    schema.System,
 		Content: sysPrompt,
@@ -429,7 +439,7 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 		zap.String("trace_id", traceID),
 		zap.String("session_key", sessionKey),
 	)
-	finalContent, finishReason, err := runWithADK(ctx, env, einoMsgs, onProgress, logger)
+	finalContent, finishReason, err := runWithADK(ctx, env, sessionKey, einoMsgs, onProgress, logger)
 	if err != nil {
 		logger.Error("消息链路: 模型调用失败，输出输入快照用于排查",
 			zap.String("trace_id", traceID),
@@ -484,6 +494,11 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 		)
 	} else {
 		saveTurn(env, sess, msg.Content, finalContent)
+	}
+
+	// 完成自学习会话跟踪（异步触发学习）
+	if env.Learning != nil {
+		_ = env.Learning.FinishConversationTracking(ctx, sessionKey, env.AgentID)
 	}
 
 	// 检查是否需要触发记忆合并
@@ -666,7 +681,7 @@ func handleSystemMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMes
 
 	env.SetToolContext(targetChannel, targetAccountID, targetChatID)
 
-	finalContent, _, err := runWithADK(ctx, env, einoMsgs, nil, logger)
+	finalContent, _, err := runWithADK(ctx, env, "", einoMsgs, nil, logger)
 	if err != nil {
 		logger.Error("系统消息处理失败", zap.Error(err))
 		return nil, nil
@@ -727,7 +742,7 @@ func consolidateMemory(env *AgentEnv, ctx context.Context, sess *session.Session
 }
 
 // runWithADK 通过 Eino ADK Runner 运行
-func runWithADK(ctx context.Context, env *AgentEnv, messages []*schema.Message, onProgress func(ToolProgressEvent), logger *zap.Logger) (string, string, error) {
+func runWithADK(ctx context.Context, env *AgentEnv, sessionKey string, messages []*schema.Message, onProgress func(ToolProgressEvent), logger *zap.Logger) (string, string, error) {
 	iter := env.ADKRunner.Run(ctx, messages)
 	traceID := traceIDFromContext(ctx)
 
@@ -918,6 +933,23 @@ func runWithADK(ctx context.Context, env *AgentEnv, messages []*schema.Message, 
 				zap.Bool("success", success),
 				zap.String("preview", preview),
 			)
+
+			// 记录工具执行步骤到自学习轨迹
+			if env.Learning != nil && sessionKey != "" {
+				var actionInput map[string]any
+				if raw := toolArgs[lookupKey]; raw != "" {
+					_ = json.Unmarshal([]byte(raw), &actionInput)
+				}
+				_ = env.Learning.RecordExecutionStep(ctx, sessionKey, &rl.TrajectoryStep{
+					StepID:      callID,
+					Timestamp:   time.Now(),
+					Action:      toolName,
+					ActionInput: actionInput,
+					Observation: resultContent,
+					Success:     success,
+					Duration:    time.Duration(durationMs) * time.Millisecond,
+				})
+			}
 
 			if onProgress != nil {
 				args := toolArgs[lookupKey]
