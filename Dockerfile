@@ -35,6 +35,18 @@ RUN rm -f /etc/apt/sources.list.d/* /etc/apt/sources.list \
     ca-certificates \
     tzdata \
     curl \
+    # --- OCR 依赖 ---
+    tesseract-ocr \
+    tesseract-ocr-chi-sim \
+    tesseract-ocr-chi-tra \
+    tesseract-ocr-eng \
+    # --- Python (技能依赖) ---
+    python3 \
+    python3-pip \
+    python3-venv \
+    # --- 多媒体处理 ---
+    ffmpeg \
+    file \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Node.js 20 runtime from the official Node image to avoid extra apt repos.
@@ -44,6 +56,13 @@ COPY --from=node_runtime /usr/local/bin/npx /usr/local/bin/npx
 COPY --from=node_runtime /usr/local/bin/corepack /usr/local/bin/corepack
 COPY --from=node_runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 
+# Install Python packages (OCR + 其他技能依赖)
+RUN pip3 install --no-cache-dir --break-system-packages \
+    pytesseract \
+    Pillow \
+    python-pptx \
+    openpyxl
+    
 # Timezone
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
