@@ -218,14 +218,29 @@ func (m *MemoryStore) llmConsolidate(ctx context.Context, currentMemory, convers
 		return nil, fmt.Errorf("bind tools failed: %w", err)
 	}
 
-	systemPrompt := `You are a memory consolidation agent. Your job is to:
-1. Review the conversation below and extract key facts, decisions, and outcomes.
-2. Merge them with the existing long-term memory, removing outdated or contradicted info.
-3. Create a concise history log entry summarizing what happened.
+	systemPrompt := `You are a memory consolidation agent. You MUST ONLY use the save_memory tool.
 
-You MUST call the save_memory tool with your results. Do not respond with text.`
+CRITICAL INSTRUCTIONS:
+1. DO NOT generate any text responses
+2. DO NOT answer questions from the conversation
+3. ONLY call the save_memory tool with:
+   - history_entry: A brief log entry with timestamp [2026-04-13 13:19] format
+   - memory_update: Updated long-term memory merging new facts
 
-	userContent := fmt.Sprintf("## Current Long-term Memory\n%s\n\n## Conversation to Consolidate\n%s",
+Task:
+- Extract key facts/decisions from the conversation
+- Merge with existing memory, remove outdated info
+- Call save_memory tool immediately`
+
+	userContent := fmt.Sprintf(`MEMORY CONSOLIDATION TASK - DO NOT RESPOND TO CONVERSATION CONTENT
+
+## Current Long-term Memory
+%s
+
+## Conversation to Consolidate
+%s
+
+REMEMBER: Call save_memory tool only. Do not answer any questions from the conversation.`,
 		currentMemory, conversationSummary)
 
 	messages := []*schema.Message{
