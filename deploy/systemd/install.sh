@@ -31,6 +31,22 @@ ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 err()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
+# ── sudo 下恢复 Go 环境 ───────────────────────────────────────
+# sudo 会重置 PATH，需要主动查找 go 所在路径
+setup_go_path() {
+    if command -v go &>/dev/null; then
+        return
+    fi
+    for p in /usr/local/go/bin /usr/local/bin /home/*/.local/go/bin /snap/bin; do
+        if [[ -x "${p}/go" ]]; then
+            export PATH="${p}:${PATH}"
+            return
+        fi
+    done
+    err "未找到 go 命令，请先安装 Go: https://go.dev/dl/"
+    exit 1
+}
+
 # ── 检查 ──────────────────────────────────────────────────────
 check_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -55,6 +71,7 @@ is_active() {
 do_install() {
     check_root
     check_project
+    setup_go_path
 
     info "同步 vendor 依赖 ..."
     (cd "${PROJECT_ROOT}" && go mod tidy && go mod vendor)
@@ -235,11 +252,15 @@ do_logs() {
 do_upgrade() {
     check_root
     check_project
+    setup_go_path
 
     info "升级 PP-Claw ..."
 
     info "拉取最新代码 ..."
     (cd "${PROJECT_ROOT}" && git pull)
+
+    info "同步 vendor 依赖 ..."
+    (cd "${PROJECT_ROOT}" && go mod tidy && go mod vendor)
 
     info "重新编译 ..."
     (cd "${PROJECT_ROOT}" && make build)
