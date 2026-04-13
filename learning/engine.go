@@ -343,7 +343,8 @@ func (e *DefaultLearningEngine) isRunning() bool {
 
 // incrementAgentIterations 增加 Agent 的迭代计数
 func (e *DefaultLearningEngine) incrementAgentIterations(agentID string) {
-	val, _ := e.agentIterations.LoadOrStore(agentID, int32(0))
+	// 🔧 修复：存储指针而不是值
+	val, _ := e.agentIterations.LoadOrStore(agentID, new(int32))
 	atomic.AddInt32(val.(*int32), 1)
 }
 
