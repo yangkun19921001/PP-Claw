@@ -55,6 +55,20 @@ func NewFileBasedTrajectoryTracker(
 		}
 	}
 
+	// 🛡️ 安全检查：确保关键字段不为零值
+	if config.FlushInterval <= 0 {
+		logger.Warn("FlushInterval 无效，使用默认值",
+			zap.Duration("invalid_value", config.FlushInterval),
+			zap.Duration("default_value", 5*time.Minute))
+		config.FlushInterval = 5 * time.Minute
+	}
+	if config.MaxTrajectories <= 0 {
+		config.MaxTrajectories = 1000
+	}
+	if config.RetentionDays <= 0 {
+		config.RetentionDays = 30
+	}
+
 	// 确保目录存在
 	if err := os.MkdirAll(basePath, 0755); err != nil {
 		return nil, fmt.Errorf("创建轨迹存储目录失败: %w", err)

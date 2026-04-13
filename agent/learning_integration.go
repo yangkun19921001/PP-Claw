@@ -121,6 +121,7 @@ func NewLearningIntegration(
 			MaxTrajectories: rc.Tracking.MaxTrajectories,
 			RetentionDays:   rc.Tracking.RetentionDays,
 			AutoCleanup:     rc.Tracking.AutoCleanup,
+			FlushInterval:   rc.Tracking.FlushInterval, // 🔧 修复遗漏的字段
 		},
 	)
 	if err != nil {
