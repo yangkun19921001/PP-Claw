@@ -9,6 +9,8 @@ type Config struct {
 	Providers ProvidersConfig `yaml:"providers"`
 	Gateway   GatewayConfig   `yaml:"gateway"`
 	Tools     ToolsConfig     `yaml:"tools"`
+	Learning  *LearningConfig `yaml:"learning,omitempty"`
+	RL        *RLConfig       `yaml:"rl,omitempty"`
 }
 
 // AgentsConfig Agent 配置

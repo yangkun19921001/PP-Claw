@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/yangkun19921001/PP-Claw/config"
 	"github.com/yangkun19921001/PP-Claw/learning"
 	"github.com/yangkun19921001/PP-Claw/rl"
 	"go.uber.org/zap"
@@ -35,29 +36,44 @@ type LearningIntegration struct {
 
 // LearningIntegrationConfig 学习集成配置
 type LearningIntegrationConfig struct {
-	LearningConfig *learning.LearningConfig // 学习引擎配置
-	RLConfig       *rl.RLConfig            // 强化学习配置
-	SkillsPath     string                  // 技能存储路径
-	TrajectoriesPath string                // 轨迹存储路径
+	LearningConfig *config.LearningConfig // 学习引擎配置
+	RLConfig       *config.RLConfig       // 强化学习配置
+	SkillsPath     string                 // 技能存储路径
+	TrajectoriesPath string               // 轨迹存储路径
 }
 
 // NewLearningIntegration 创建学习功能集成器
 func NewLearningIntegration(
 	env *AgentEnv,
 	logger *zap.Logger,
-	config *LearningIntegrationConfig,
+	cfg *LearningIntegrationConfig,
 ) (*LearningIntegration, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 
-	if config == nil {
+	if cfg == nil {
 		return nil, fmt.Errorf("配置不能为空")
 	}
 
+	lc := cfg.LearningConfig
+	rc := cfg.RLConfig
+
+	// 桥接 config -> learning 类型
+	learningCfg := &learning.LearningConfig{Enabled: lc.Enabled}
+	learningCfg.SkillExtraction.ReviewInterval = lc.SkillExtraction.ReviewInterval
+	learningCfg.SkillExtraction.MinConversationLength = lc.SkillExtraction.MinConversationLength
+	learningCfg.SkillExtraction.ExtractorModel = lc.SkillExtraction.ExtractorModel
+	learningCfg.SkillExtraction.ReviewPrompt = lc.SkillExtraction.ReviewPrompt
+	learningCfg.Storage.Type = lc.Storage.Type
+	learningCfg.Storage.Path = lc.Storage.Path
+	learningCfg.Storage.MaxSkills = lc.Storage.MaxSkills
+	learningCfg.Injection.MaxInjectSkills = lc.Injection.MaxInjectSkills
+	learningCfg.Injection.SimilarityThreshold = lc.Injection.SimilarityThreshold
+
 	// 创建技能存储库
 	skillRepo, err := learning.NewFileBasedSkillRepository(
-		config.SkillsPath,
+		cfg.SkillsPath,
 		logger,
 	)
 	if err != nil {
@@ -69,9 +85,10 @@ func NewLearningIntegration(
 		env.ChatModel,
 		logger,
 		&learning.SkillExtractionConfig{
-			ReviewInterval:        config.LearningConfig.SkillExtraction.ReviewInterval,
-			MinConversationLength: config.LearningConfig.SkillExtraction.MinConversationLength,
-			ExtractorModel:       config.LearningConfig.SkillExtraction.ExtractorModel,
+			ReviewInterval:        lc.SkillExtraction.ReviewInterval,
+			MinConversationLength: lc.SkillExtraction.MinConversationLength,
+			MinToolCalls:         lc.SkillExtraction.MinToolCalls,
+			ExtractorModel:       lc.SkillExtraction.ExtractorModel,
 		},
 	)
 
@@ -80,7 +97,7 @@ func NewLearningIntegration(
 		skillExtractor,
 		skillRepo,
 		logger,
-		config.LearningConfig,
+		learningCfg,
 	)
 
 	// 创建技能注入器
@@ -88,20 +105,22 @@ func NewLearningIntegration(
 		skillRepo,
 		logger,
 		&learning.SkillInjectionConfig{
-			MaxInjectSkills:     config.LearningConfig.Injection.MaxInjectSkills,
-			SimilarityThreshold: config.LearningConfig.Injection.SimilarityThreshold,
+			MaxInjectSkills:     lc.Injection.MaxInjectSkills,
+			SimilarityThreshold: lc.Injection.SimilarityThreshold,
+			CacheExpireSeconds:  lc.Injection.CacheExpireSeconds,
+			EnableSemanticMatch: lc.Injection.EnableSemanticMatch,
 		},
 	)
 
 	// 创建轨迹跟踪器
 	trajectoryTracker, err := rl.NewFileBasedTrajectoryTracker(
-		config.TrajectoriesPath,
+		cfg.TrajectoriesPath,
 		logger,
 		&rl.TrackingConfig{
-			StoragePath:     config.TrajectoriesPath,
-			MaxTrajectories: config.RLConfig.Tracking.MaxTrajectories,
-			RetentionDays:   config.RLConfig.Tracking.RetentionDays,
-			AutoCleanup:     config.RLConfig.Tracking.AutoCleanup,
+			StoragePath:     cfg.TrajectoriesPath,
+			MaxTrajectories: rc.Tracking.MaxTrajectories,
+			RetentionDays:   rc.Tracking.RetentionDays,
+			AutoCleanup:     rc.Tracking.AutoCleanup,
 		},
 	)
 	if err != nil {
@@ -120,7 +139,7 @@ func NewLearningIntegration(
 		skillInjector:     skillInjector,
 		trajectoryTracker: trajectoryTracker,
 		compressor:        compressor,
-		enabled:           config.LearningConfig.Enabled && config.RLConfig.Enabled,
+		enabled:           lc.Enabled && rc.Enabled,
 		logger:            logger,
 	}
 
