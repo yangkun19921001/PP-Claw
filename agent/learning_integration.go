@@ -18,28 +18,28 @@ import (
 // 单一职责：协调自学习循环和RL功能与现有Agent系统的集成
 type LearningIntegration struct {
 	// 核心组件
-	learningEngine     learning.LearningEngine    // 学习引擎
-	skillInjector     learning.SkillInjector     // 技能注入器
-	trajectoryTracker rl.TrajectoryTracker       // 轨迹跟踪器
-	compressor        rl.TrajectoryCompressor    // 轨迹压缩器
+	learningEngine    learning.LearningEngine // 学习引擎
+	skillInjector     learning.SkillInjector  // 技能注入器
+	trajectoryTracker rl.TrajectoryTracker    // 轨迹跟踪器
+	compressor        rl.TrajectoryCompressor // 轨迹压缩器
 
 	// 运行状态
-	enabled    bool                  // 是否启用
-	logger     *zap.Logger          // 日志器
-	mu         sync.RWMutex         // 读写锁
+	enabled bool         // 是否启用
+	logger  *zap.Logger  // 日志器
+	mu      sync.RWMutex // 读写锁
 
 	// 统计和监控
-	conversationCount int64    // 处理的会话数量
-	skillsInjected   int64    // 注入的技能数量
+	conversationCount   int64 // 处理的会话数量
+	skillsInjected      int64 // 注入的技能数量
 	trajectoriesTracked int64 // 跟踪的轨迹数量
 }
 
 // LearningIntegrationConfig 学习集成配置
 type LearningIntegrationConfig struct {
-	LearningConfig *config.LearningConfig // 学习引擎配置
-	RLConfig       *config.RLConfig       // 强化学习配置
-	SkillsPath     string                 // 技能存储路径
-	TrajectoriesPath string               // 轨迹存储路径
+	LearningConfig   *config.LearningConfig // 学习引擎配置
+	RLConfig         *config.RLConfig       // 强化学习配置
+	SkillsPath       string                 // 技能存储路径
+	TrajectoriesPath string                 // 轨迹存储路径
 }
 
 // NewLearningIntegration 创建学习功能集成器
@@ -87,8 +87,9 @@ func NewLearningIntegration(
 		&learning.SkillExtractionConfig{
 			ReviewInterval:        lc.SkillExtraction.ReviewInterval,
 			MinConversationLength: lc.SkillExtraction.MinConversationLength,
-			MinToolCalls:         lc.SkillExtraction.MinToolCalls,
-			ExtractorModel:       lc.SkillExtraction.ExtractorModel,
+			MinToolCalls:          lc.SkillExtraction.MinToolCalls,
+			ExtractorModel:        lc.SkillExtraction.ExtractorModel,
+			ReviewPrompt:          lc.SkillExtraction.ReviewPrompt,
 		},
 	)
 
@@ -396,20 +397,20 @@ func (li *LearningIntegration) GetLearningStats() *LearningStats {
 
 	return &LearningStats{
 		ConversationCount:   atomic.LoadInt64(&li.conversationCount),
-		SkillsInjected:     atomic.LoadInt64(&li.skillsInjected),
+		SkillsInjected:      atomic.LoadInt64(&li.skillsInjected),
 		TrajectoriesTracked: atomic.LoadInt64(&li.trajectoriesTracked),
-		LearningEngine:     engineStats,
-		CompressionStats:   compressionStats,
+		LearningEngine:      engineStats,
+		CompressionStats:    compressionStats,
 	}
 }
 
 // LearningStats 学习统计信息
 type LearningStats struct {
-	ConversationCount    int64                     // 处理的会话数量
-	SkillsInjected      int64                     // 注入的技能数量
-	TrajectoriesTracked int64                     // 跟踪的轨迹数量
-	LearningEngine      *learning.LearningStats   // 学习引擎统计
-	CompressionStats    *rl.CompressionStats      // 压缩统计
+	ConversationCount   int64                   // 处理的会话数量
+	SkillsInjected      int64                   // 注入的技能数量
+	TrajectoriesTracked int64                   // 跟踪的轨迹数量
+	LearningEngine      *learning.LearningStats // 学习引擎统计
+	CompressionStats    *rl.CompressionStats    // 压缩统计
 }
 
 // Shutdown 关闭学习功能
