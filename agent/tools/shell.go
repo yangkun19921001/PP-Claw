@@ -19,15 +19,17 @@ type ExecTool struct {
 	RestrictToWorkspace bool
 }
 
-func (t *ExecTool) Name() string        { return "execute" }
-func (t *ExecTool) Description() string { return "Execute a shell command and return its output." }
+func (t *ExecTool) Name() string { return "execute" }
+func (t *ExecTool) Description() string {
+	return "Execute a shell command and return its output. The command parameter is required and must be a non-empty string."
+}
 func (t *ExecTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"command": map[string]any{
 				"type":        "string",
-				"description": "The shell command to execute",
+				"description": "The shell command to execute. Required and must be non-empty, for example: ls -la",
 			},
 		},
 		"required": []any{"command"},

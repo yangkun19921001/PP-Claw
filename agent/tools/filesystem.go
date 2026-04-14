@@ -74,23 +74,36 @@ type WriteFileTool struct {
 
 func (t *WriteFileTool) Name() string { return "write_file" }
 func (t *WriteFileTool) Description() string {
-	return "Write content to a file. Creates parent directories if needed."
+	return "Write content to a file. Creates parent directories if needed. Both path and content are required; pass an explicit empty string only when you intentionally want an empty file."
 }
 func (t *WriteFileTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"path":    map[string]any{"type": "string", "description": "Path to write to"},
-			"content": map[string]any{"type": "string", "description": "Content to write"},
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Path to write to",
+			},
+			"content": map[string]any{
+				"type":        "string",
+				"description": "Content to write. Required; use an explicit empty string only when creating an empty file on purpose.",
+			},
 		},
 		"required": []any{"path", "content"},
 	}
 }
 func (t *WriteFileTool) Execute(_ context.Context, params map[string]any) (string, error) {
 	path, _ := params["path"].(string)
-	content, _ := params["content"].(string)
 	if path == "" {
 		return "", fmt.Errorf("path is required")
+	}
+	rawContent, hasContent := params["content"]
+	if !hasContent {
+		return "", fmt.Errorf("content is required; pass an explicit empty string if you intentionally want to create an empty file")
+	}
+	content, ok := rawContent.(string)
+	if !ok {
+		return "", fmt.Errorf("content must be a string")
 	}
 	fullPath := t.resolvePath(path)
 	if t.AllowedDir != "" && !strings.HasPrefix(fullPath, t.AllowedDir) {
