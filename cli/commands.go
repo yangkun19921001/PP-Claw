@@ -156,6 +156,10 @@ func runGateway() error {
 			accountID = cfg.Channels.DefaultAccountIDForChannel(job.Payload.Channel)
 		}
 		inbound.AccountID = accountID
+		// Fix: 每次 cron 执行使用独立 session，防止历史投毒导致 LLM 不调用工具。
+		// 使用 "cron:<jobID>:<timestamp>" 后缀隔离，保证输出仍路由到正确的 channel/chatID。
+		inbound.SessionKeyOverride = fmt.Sprintf("cron:%s:%d",
+			job.ID, time.Now().UnixMilli())
 		msgBus.PublishInbound(inbound)
 		return "Job dispatched to agent", nil
 	})

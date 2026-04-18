@@ -1,7 +1,7 @@
 # ============================================================
 # Stage 1: Builder
 # ============================================================
-FROM golang:1.25-bookworm AS builder
+FROM docker.1ms.run/golang:1.25-bookworm AS builder
 
 WORKDIR /src
 
@@ -16,12 +16,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/pp-claw .
 # ============================================================
 # Stage 2: Node Runtime
 # ============================================================
-FROM node:20-bookworm-slim AS node_runtime
+FROM docker.1ms.run/node:20-bookworm-slim AS node_runtime
 
 # ============================================================
 # Stage 3: Runtime
 # ============================================================
-FROM debian:bookworm-slim
+FROM docker.1ms.run/debian:bookworm-slim
 
 # Use domestic Debian mirrors to reduce network failures during image builds.
 RUN rm -f /etc/apt/sources.list.d/* /etc/apt/sources.list \

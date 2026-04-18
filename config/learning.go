@@ -228,7 +228,7 @@ func (c *Config) ResolveSkillsPath(agentID string) string {
 		return filepath.Join("./skills", agentID)
 	}
 
-	path := c.Learning.Storage.Path
+	path := ExpandHome(c.Learning.Storage.Path)
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(".", path)
 	}
@@ -242,7 +242,7 @@ func (c *Config) ResolveTrajectoriesPath(agentID string) string {
 		return filepath.Join("./trajectories", agentID)
 	}
 
-	path := c.RL.Tracking.StoragePath
+	path := ExpandHome(c.RL.Tracking.StoragePath)
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(".", path)
 	}

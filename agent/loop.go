@@ -378,6 +378,14 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 	if userContentStr == "" {
 		userContentStr = userContent
 	}
+	// Fix: cron 触发的消息注入强制工具调用指令，防止 LLM 只输出文本不调用工具
+	isCronMessage := msg.SenderID == "cron"
+	if isCronMessage {
+		userContentStr += "\n\n[Scheduled Task — Tool Call Required]\n" +
+			"This is an automated scheduled task. You MUST call tools (web_search, web_fetch, execute, read_file, etc.) to complete it.\n" +
+			"Do NOT just describe or acknowledge what you would do — actually invoke the tools NOW to produce real results.\n" +
+			"If you respond without calling any tool, the task will be considered failed."
+	}
 	einoMsgs = append(einoMsgs, &schema.Message{Role: schema.User, Content: userContentStr})
 
 	logger.Info("消息链路: 模型输入构建完成",
@@ -439,7 +447,7 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 		zap.String("trace_id", traceID),
 		zap.String("session_key", sessionKey),
 	)
-	finalContent, finishReason, err := runWithADK(ctx, env, sessionKey, einoMsgs, onProgress, logger)
+	finalContent, finishReason, toolCallCount, err := runWithADK(ctx, env, sessionKey, einoMsgs, onProgress, logger)
 	if err != nil {
 		logger.Error("消息链路: 模型调用失败，输出输入快照用于排查",
 			zap.String("trace_id", traceID),
@@ -456,7 +464,38 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 		zap.String("session_key", sessionKey),
 		zap.Int("final_content_length", len(finalContent)),
 		zap.String("finish_reason", finishReason),
+		zap.Int("tool_call_count", toolCallCount),
 	)
+
+	// Fix 3: cron 触发的消息如果首次未调用任何工具，自动重试一次
+	if isCronMessage && toolCallCount == 0 && finishReason == "ok" {
+		logger.Warn("消息链路: cron 任务首次执行未调用工具，自动重试",
+			zap.String("trace_id", traceID),
+			zap.String("session_key", sessionKey),
+			zap.Int("first_content_length", len(finalContent)),
+		)
+		// 追加 assistant 的空回复和系统纠正提示再重试
+		retryMsgs := make([]*schema.Message, len(einoMsgs))
+		copy(retryMsgs, einoMsgs)
+		retryMsgs = append(retryMsgs,
+			&schema.Message{Role: schema.Assistant, Content: finalContent},
+			&schema.Message{Role: schema.User, Content: "你上一次回复没有调用任何工具。这是一个自动化定时任务，必须实际执行工具调用（如 web_search、web_fetch、execute 等）才能完成。请立即调用工具执行任务，不要再仅输出文本描述。"},
+		)
+		finalContent, finishReason, toolCallCount, err = runWithADK(ctx, env, sessionKey, retryMsgs, onProgress, logger)
+		if err != nil {
+			logger.Error("消息链路: cron 重试执行失败",
+				zap.String("trace_id", traceID),
+				zap.Error(err),
+			)
+			result = "agent_error"
+			return nil, err
+		}
+		logger.Info("消息链路: cron 重试执行完成",
+			zap.String("trace_id", traceID),
+			zap.Int("retry_content_length", len(finalContent)),
+			zap.Int("retry_tool_call_count", toolCallCount),
+		)
+	}
 
 	if finalContent == "" {
 		finalContent = "I've completed processing but have no response to give."
@@ -487,10 +526,17 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 	)
 
 	// 保存会话
+	// Fix 4: cron 触发且未调用工具的短响应不写入 session，防止历史投毒
 	if finishReason == "error" {
 		logger.Warn("消息链路: 错误响应不保存到会话",
 			zap.String("trace_id", traceID),
 			zap.String("session_key", sessionKey),
+		)
+	} else if isCronMessage && toolCallCount == 0 && len(finalContent) < 500 {
+		logger.Warn("消息链路: cron 无效响应（无工具调用）不保存到会话",
+			zap.String("trace_id", traceID),
+			zap.String("session_key", sessionKey),
+			zap.Int("final_content_length", len(finalContent)),
 		)
 	} else {
 		saveTurn(env, sess, msg.Content, finalContent)
@@ -681,7 +727,7 @@ func handleSystemMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMes
 
 	env.SetToolContext(targetChannel, targetAccountID, targetChatID)
 
-	finalContent, _, err := runWithADK(ctx, env, "", einoMsgs, nil, logger)
+	finalContent, _, _, err := runWithADK(ctx, env, "", einoMsgs, nil, logger)
 	if err != nil {
 		logger.Error("系统消息处理失败", zap.Error(err))
 		return nil, nil
@@ -741,8 +787,8 @@ func consolidateMemory(env *AgentEnv, ctx context.Context, sess *session.Session
 	}
 }
 
-// runWithADK 通过 Eino ADK Runner 运行
-func runWithADK(ctx context.Context, env *AgentEnv, sessionKey string, messages []*schema.Message, onProgress func(ToolProgressEvent), logger *zap.Logger) (string, string, error) {
+// runWithADK 通过 Eino ADK Runner 运行。返回 (最终内容, 结束原因, 工具调用总数, error)。
+func runWithADK(ctx context.Context, env *AgentEnv, sessionKey string, messages []*schema.Message, onProgress func(ToolProgressEvent), logger *zap.Logger) (string, string, int, error) {
 	iter := env.ADKRunner.Run(ctx, messages)
 	traceID := traceIDFromContext(ctx)
 
@@ -753,6 +799,7 @@ func runWithADK(ctx context.Context, env *AgentEnv, sessionKey string, messages 
 
 	var lastContent string
 	finishReason := "ok"
+	totalToolCalls := 0
 
 	const maxRepeatErrors = 3
 	lastToolSig := ""
@@ -775,7 +822,7 @@ func runWithADK(ctx context.Context, env *AgentEnv, sessionKey string, messages 
 		}
 		eventCount++
 		if event.Err != nil {
-			return "", "error", fmt.Errorf("agent error: %w", event.Err)
+			return "", "error", totalToolCalls, fmt.Errorf("agent error: %w", event.Err)
 		}
 
 		if event.Output == nil || event.Output.MessageOutput == nil {
@@ -829,6 +876,7 @@ func runWithADK(ctx context.Context, env *AgentEnv, sessionKey string, messages 
 			}
 
 			if len(msg.ToolCalls) > 0 {
+				totalToolCalls += len(msg.ToolCalls)
 				toolSig := ""
 				for _, tc := range msg.ToolCalls {
 					toolSig += tc.Function.Name + ":" + tc.Function.Arguments + "|"
@@ -857,7 +905,7 @@ func runWithADK(ctx context.Context, env *AgentEnv, sessionKey string, messages 
 						if lastContent == "" {
 							lastContent = fmt.Sprintf("抱歉，我在尝试执行操作时遇到了重复错误（连续 %d 次相同调用），已自动停止。请检查指令或重试。", repeatCount)
 						}
-						return lastContent, finishReason, nil
+						return lastContent, finishReason, totalToolCalls, nil
 					}
 				} else {
 					lastToolSig = toolSig
@@ -977,7 +1025,7 @@ func runWithADK(ctx context.Context, env *AgentEnv, sessionKey string, messages 
 		}
 	}
 
-	return lastContent, finishReason, nil
+	return lastContent, finishReason, totalToolCalls, nil
 }
 
 // ============ 工具函数 ============

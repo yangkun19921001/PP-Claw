@@ -403,7 +403,7 @@ func (p *AgentEnvPool) Delegate(ctx context.Context, targetAgentID, task string)
 	}
 
 	// 同步执行目标 Agent 的 ADK Runner
-	content, _, err := runWithADK(ctx, env, "", messages, nil, p.logger)
+	content, _, _, err := runWithADK(ctx, env, "", messages, nil, p.logger)
 	if err != nil {
 		return "", fmt.Errorf("delegation to %q failed: %w", targetAgentID, err)
 	}
