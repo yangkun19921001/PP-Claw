@@ -26,6 +26,7 @@ import (
 	"github.com/yangkun19921001/PP-Claw/cli/tui"
 	"github.com/yangkun19921001/PP-Claw/config"
 	"github.com/yangkun19921001/PP-Claw/cron"
+	"github.com/yangkun19921001/PP-Claw/pkg/api"
 	"github.com/yangkun19921001/PP-Claw/session"
 	"go.uber.org/zap"
 )
@@ -219,8 +220,22 @@ func runGateway() error {
 				zap.Int("port", cfg.Gateway.Port))
 		}
 		channelMgr.RegisterRoutes(mux)
+
+		apiSrv := api.New(&api.APIServerConfig{
+			Config:      cfg,
+			ConfigPath:  cfgPath,
+			Bus:         msgBus,
+			AgentLoop:   agentLoop,
+			Pool:        pool,
+			CronService: cronSvc,
+			ChannelMgr:  channelMgr,
+			Logger:      logger,
+			Mode:        "gateway",
+		})
+		apiSrv.RegisterRoutes(mux)
+
 		gatewayAddr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
-		srv := &http.Server{Addr: gatewayAddr, Handler: mux}
+		srv := &http.Server{Addr: gatewayAddr, Handler: api.WrapMiddleware(logger, mux)}
 		go func() {
 			logger.Info("Gateway HTTP server starting", zap.String("addr", gatewayAddr))
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -529,6 +544,22 @@ func runAgent(message, sessionID string) error {
 			if ctx.Err() == nil {
 				logger.Error("Agent loop exit with error", zap.Error(err))
 			}
+		}
+	}()
+
+	apiSrv := api.New(&api.APIServerConfig{
+		Config:     cfg,
+		ConfigPath: cfgPath,
+		Bus:        msgBus,
+		AgentLoop:  agentLoop,
+		Pool:       pool,
+		Logger:     logger,
+		Mode:       "agent",
+	})
+	apiAddr := fmt.Sprintf("127.0.0.1:%d", cfg.Gateway.Port)
+	go func() {
+		if err := apiSrv.StartStandalone(ctx, apiAddr); err != nil {
+			logger.Error("API server error", zap.Error(err))
 		}
 	}()
 

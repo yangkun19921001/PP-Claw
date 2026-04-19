@@ -133,8 +133,6 @@ channels:
     feishu:
         enabled: true
         # --- 单账号模式（无 accounts 时，顶层字段即为唯一账号配置）---
-        app_id: ${FEISHU_APP_ID}
-        app_secret: ${FEISHU_APP_SECRET}
         encrypt_key: ""
         verification_token: ""
         allow_from: []
@@ -239,11 +237,7 @@ channels:
         accounts:
             wx1:
                 enabled: true
-                base_url: ""
-                cdn_base_url: ""
-                bot_type: ""
-                allow_from: []
-                ilink_user_id: ""
+
 providers:
     custom:
         api_key: ""

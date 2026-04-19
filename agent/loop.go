@@ -371,22 +371,29 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 		einoMsgs = append(einoMsgs, &schema.Message{Role: schemaRole, Content: content})
 	}
 
-	// Current user message with runtime context
-	userContent := env.Context.buildUserContent(msg.Content, msg.Media)
-	rc := env.Context.injectRuntimeContext(userContent, msg.Channel, msg.ChatID)
-	userContentStr, _ := rc.(string)
-	if userContentStr == "" {
-		userContentStr = userContent
-	}
-	// Fix: cron 触发的消息注入强制工具调用指令，防止 LLM 只输出文本不调用工具
+	// Current user message with runtime context (supports multimodal)
 	isCronMessage := msg.SenderID == "cron"
+	userContent := env.Context.buildUserContent(msg.Content, msg.Media)
+	userContent = env.Context.injectRuntimeContext(userContent, msg.Channel, msg.ChatID)
+
+	cronSuffix := ""
 	if isCronMessage {
-		userContentStr += "\n\n[Scheduled Task — Tool Call Required]\n" +
+		cronSuffix = "\n\n[Scheduled Task — Tool Call Required]\n" +
 			"This is an automated scheduled task. You MUST call tools (web_search, web_fetch, execute, read_file, etc.) to complete it.\n" +
 			"Do NOT just describe or acknowledge what you would do — actually invoke the tools NOW to produce real results.\n" +
 			"If you respond without calling any tool, the task will be considered failed."
 	}
-	einoMsgs = append(einoMsgs, &schema.Message{Role: schema.User, Content: userContentStr})
+
+	userMsg := &schema.Message{Role: schema.User}
+	switch v := userContent.(type) {
+	case string:
+		userMsg.Content = v + cronSuffix
+	case []map[string]any:
+		userMsg.UserInputMultiContent = buildEinoMultiContent(v, cronSuffix)
+	default:
+		userMsg.Content = msg.Content + cronSuffix
+	}
+	einoMsgs = append(einoMsgs, userMsg)
 
 	logger.Info("消息链路: 模型输入构建完成",
 		zap.String("trace_id", traceID),
@@ -394,8 +401,8 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 		zap.Int("eino_messages", len(einoMsgs)),
 		zap.Int("history_count", len(history)),
 		zap.Int("attached_media_count", len(msg.Media)),
-		zap.Bool("multimodal", false),
-		zap.Int("user_content_length", len(userContentStr)),
+		zap.Bool("multimodal", userMsg.UserInputMultiContent != nil),
+		zap.Int("user_content_length", len(userMsg.Content)),
 		zap.Any("message_snapshot", buildModelInputSnapshot(einoMsgs)),
 	)
 

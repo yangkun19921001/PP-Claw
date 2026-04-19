@@ -1,13 +1,17 @@
 package agent
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io/fs"
+	"mime"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/cloudwego/eino/schema"
 )
 
 // ContextBuilder 构建 Agent 上下文 (对标 pp-claw/agent/context.py:ContextBuilder)
@@ -212,9 +216,7 @@ func (c *ContextBuilder) BuildMessages(
 
 	// 当前用户消息 (包含图片和运行时上下文)
 	userContent := c.buildUserContent(currentMessage, media)
-	if withRuntime, ok := c.injectRuntimeContext(userContent, channel, chatID).(string); ok {
-		userContent = withRuntime
-	}
+	userContent = c.injectRuntimeContext(userContent, channel, chatID)
 	messages = append(messages, map[string]any{
 		"role":    "user",
 		"content": userContent,
@@ -223,34 +225,108 @@ func (c *ContextBuilder) BuildMessages(
 	return messages
 }
 
+var imageExts = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
+	".webp": true, ".bmp": true, ".svg": true, ".ico": true,
+}
+
+var textExts = map[string]bool{
+	".txt": true, ".md": true, ".csv": true, ".tsv": true,
+	".json": true, ".xml": true, ".yaml": true, ".yml": true,
+	".toml": true, ".ini": true, ".cfg": true, ".conf": true,
+	".log": true, ".sh": true, ".bash": true, ".zsh": true,
+	".py": true, ".go": true, ".js": true, ".ts": true,
+	".java": true, ".c": true, ".cpp": true, ".h": true,
+	".rs": true, ".rb": true, ".php": true, ".sql": true,
+	".html": true, ".css": true, ".scss": true, ".less": true,
+	".jsx": true, ".tsx": true, ".vue": true, ".svelte": true,
+}
+
+func isTextFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	if textExts[ext] {
+		return true
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return false
+	}
+	sample := data
+	if len(sample) > 1024 {
+		sample = sample[:1024]
+	}
+	for _, b := range sample {
+		if b == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // buildUserContent 构建用户消息内容。
-// 当前统一走文本链路：如果存在本地媒体文件，则把路径追加到文本里，由模型按普通文本理解。
-func (c *ContextBuilder) buildUserContent(text string, media []string) string {
+// 图片文件转为 base64 多模态 image_url 块，非图片文件内容作为文本附加。
+func (c *ContextBuilder) buildUserContent(text string, media []string) any {
 	if len(media) == 0 {
 		return text
 	}
 
-	var localMedia []string
+	var imageParts []map[string]any
+	var fileParts []string
+
 	for _, path := range media {
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
-		localMedia = append(localMedia, path)
+		ext := strings.ToLower(filepath.Ext(path))
+		if imageExts[ext] {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			mimeType := mime.TypeByExtension(ext)
+			if mimeType == "" {
+				mimeType = "image/png"
+			}
+			dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(data))
+			imageParts = append(imageParts, map[string]any{
+				"type":      "image_url",
+				"image_url": map[string]any{"url": dataURL},
+			})
+		} else if isTextFile(path) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				fileParts = append(fileParts, fmt.Sprintf("[File: %s] (unreadable)", filepath.Base(path)))
+				continue
+			}
+			content := string(data)
+			if len(content) > 10000 {
+				content = content[:10000] + "\n... (truncated)"
+			}
+			fileParts = append(fileParts, fmt.Sprintf("[File: %s]\n%s", filepath.Base(path), content))
+		} else {
+			fileParts = append(fileParts, fmt.Sprintf("[Attached File: %s]\nPath: %s\nUse tools (read_file, execute) to process this file.", filepath.Base(path), path))
+		}
 	}
 
-	if len(localMedia) == 0 {
+	if len(imageParts) == 0 && len(fileParts) == 0 {
 		return text
 	}
 
-	var sb strings.Builder
-	sb.WriteString(text)
-	sb.WriteString("\n\n[Attached Local Media]\n")
-	for _, path := range localMedia {
-		sb.WriteString("- ")
-		sb.WriteString(path)
-		sb.WriteString("\n")
+	// 有非图片文件时，追加到文本
+	msgText := text
+	if len(fileParts) > 0 {
+		msgText = msgText + "\n\n" + strings.Join(fileParts, "\n\n")
 	}
-	return strings.TrimSpace(sb.String())
+
+	// 无图片时直接返回文本
+	if len(imageParts) == 0 {
+		return strings.TrimSpace(msgText)
+	}
+
+	// 有图片时返回多模态内容
+	parts := []map[string]any{{"type": "text", "text": strings.TrimSpace(msgText)}}
+	parts = append(parts, imageParts...)
+	return parts
 }
 
 // injectRuntimeContext 注入运行时上下文 (对标 context.py:_inject_runtime_context)
@@ -275,6 +351,39 @@ func (c *ContextBuilder) injectRuntimeContext(content any, channel, chatID strin
 	default:
 		return content
 	}
+}
+
+// buildEinoMultiContent 将 map 格式的多模态内容转换为 Eino schema 的 MessageInputPart 列表。
+func buildEinoMultiContent(parts []map[string]any, extraText string) []schema.MessageInputPart {
+	var result []schema.MessageInputPart
+	for _, p := range parts {
+		typ, _ := p["type"].(string)
+		switch typ {
+		case "text":
+			txt, _ := p["text"].(string)
+			result = append(result, schema.MessageInputPart{
+				Type: schema.ChatMessagePartTypeText,
+				Text: txt,
+			})
+		case "image_url":
+			if iu, ok := p["image_url"].(map[string]any); ok {
+				url, _ := iu["url"].(string)
+				result = append(result, schema.MessageInputPart{
+					Type: schema.ChatMessagePartTypeImageURL,
+					Image: &schema.MessageInputImage{
+						MessagePartCommon: schema.MessagePartCommon{URL: &url},
+					},
+				})
+			}
+		}
+	}
+	if extraText != "" {
+		result = append(result, schema.MessageInputPart{
+			Type: schema.ChatMessagePartTypeText,
+			Text: extraText,
+		})
+	}
+	return result
 }
 
 // AddToolResult 添加工具结果到消息列表

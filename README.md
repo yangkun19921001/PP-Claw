@@ -10,7 +10,11 @@
   <a href="https://github.com/yangkun19921001/PP-Claw"><img src="https://img.shields.io/badge/Based_on-nanobot-orange?style=for-the-badge" alt="Based on nanobot"></a>
 </p>
 
-<p><strong>多 Agent 军团 · 18 个 LLM Provider · 12 个消息渠道 · MCP 工具扩展 · 长期记忆 · 子代理 · 定时任务</strong></p>
+<p><strong>多 Agent 军团 · 18 个 LLM Provider · 12 个消息渠道 · MCP 工具扩展 · 长期记忆 · 子代理 · 定时任务 · Desktop UI</strong></p>
+
+<p>
+  <a href="https://github.com/yangkun19921001/PP-Claw-UI"><img src="https://img.shields.io/badge/Desktop_UI-Electron-9b59b6?style=for-the-badge&logo=electron&logoColor=white" alt="Desktop UI"></a>
+</p>
 
 </div>
 
@@ -42,6 +46,8 @@
 | 💓 **心跳检查** | 定期执行 HEARTBEAT.md 待办任务，智能评估是否通知 |
 | 🛡️ **安全防护** | SSRF 拦截 / Shell 危险命令阻断 / 路径遍历检测 / workspace 沙箱 |
 | 📡 **实时进度** | 工具调用时向渠道推送进度提示 |
+| 🌐 **API 服务** | 🆕 RESTful API + WebSocket，支持 Desktop UI 管理 |
+| 🖼️ **多模态** | 🆕 图片 base64 编码、文本文件内联、二进制文件工具引用 |
 | 📊 **渠道状态面板** | `channels status` 自动检测 gateway — 在线显示运行时状态，离线回退配置视图；TUI 头部实时展示在线渠道摘要 |
 | 🚀 **Prompt Caching** | Anthropic 自动注入 caching header |
 
@@ -915,6 +921,58 @@ rl:
     learning_rate: 0.01
     exploration_rate: 0.1
 ```
+
+---
+
+## 🖥️ Desktop UI
+
+PP-Claw 提供基于 Electron + React + Vite 构建的桌面管理 UI：[**PP-Claw-UI**](https://github.com/yangkun19921001/PP-Claw-UI)
+
+| 功能 | 说明 |
+|------|------|
+| 📊 **Dashboard** | 系统状态总览、Agent 概览 |
+| 💬 **Chat** | WebSocket 实时聊天，支持图片/文件上传与预览（多模态） |
+| 🤖 **Agent 管理** | Agent 状态监控 |
+| ⚙️ **渠道配置** | 继承感知的账号编辑器，可视化覆盖/继承状态 |
+| 📦 **技能浏览** | 内置 + 已学技能查看 |
+| ⏰ **Cron 管理** | 定时任务增删查改 |
+| 🔧 **工具 & Provider** | 工具列表、Provider/Gateway 配置 |
+
+### 启动 UI
+
+```bash
+# 1. 启动 PP-Claw API 服务
+pp-claw gateway
+
+# 2. 启动 Desktop UI
+cd PP-Claw-UI
+pnpm install && pnpm dev
+```
+
+UI 默认连接 `http://localhost:18790` API 服务。
+
+## 🌐 API 服务
+
+Gateway 启动时自动提供 RESTful API 和 WebSocket 接口：
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/status` | GET | 系统状态 |
+| `/api/v1/agents` | GET | Agent 列表及状态 |
+| `/api/v1/channels` | GET | 渠道状态 |
+| `/api/v1/config` | GET/PUT | 配置读取与更新 |
+| `/api/v1/skills` | GET/POST | 技能列表与创建 |
+| `/api/v1/sessions` | GET | 会话列表 |
+| `/api/v1/cron` | GET/POST | 定时任务管理 |
+| `/api/v1/tools` | GET | 工具列表 |
+| `/api/v1/chat/send` | POST | 发送消息（REST，支持图片/文件） |
+| `/api/v1/chat/ws` | WebSocket | 实时双向聊天 |
+| `/api/v1/files/upload` | POST | 文件上传 |
+| `/api/v1/files/:name` | GET | 文件下载 |
+
+### 多模态支持
+
+API 服务支持图片和文件上传，上传的图片会自动转为 base64 多模态内容发送给 LLM，文本文件内联读取，二进制文件通过工具引用处理。
 
 ---
 
