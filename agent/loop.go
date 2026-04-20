@@ -546,7 +546,7 @@ func processMessage(ctx context.Context, env *AgentEnv, msg *bus.InboundMessage,
 			zap.Int("final_content_length", len(finalContent)),
 		)
 	} else {
-		saveTurn(env, sess, msg.Content, finalContent)
+		saveTurn(env, sess, msg.Content, finalContent, msg.Media)
 	}
 
 	// 完成自学习会话跟踪（异步触发学习）
@@ -760,13 +760,13 @@ var runtimeContextRE = regexp.MustCompile(`(?s)<runtime_context>.*?</runtime_con
 var base64ImageRE = regexp.MustCompile(`data:image/[^;]+;base64,[A-Za-z0-9+/=]{100,}`)
 
 // saveTurn saves user+assistant messages to the session with cleanup
-func saveTurn(env *AgentEnv, sess *session.Session, userContent, assistantContent string) {
+func saveTurn(env *AgentEnv, sess *session.Session, userContent, assistantContent string, userMedia []string) {
 	cleanUser := runtimeContextRE.ReplaceAllString(userContent, "")
 	cleanUser = strings.TrimSpace(cleanUser)
 	cleanUser = base64ImageRE.ReplaceAllString(cleanUser, "[image]")
 
-	if cleanUser != "" {
-		sess.AddMessage("user", cleanUser)
+	if cleanUser != "" || len(userMedia) > 0 {
+		sess.AddMessageWithMedia("user", cleanUser, userMedia)
 	}
 
 	cleanAssistant := base64ImageRE.ReplaceAllString(assistantContent, "[image]")

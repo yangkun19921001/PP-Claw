@@ -28,6 +28,20 @@ func (s *Session) AddMessage(role, content string) {
 	s.UpdatedAt = time.Now()
 }
 
+// AddMessageWithMedia 添加带媒体附件的消息
+func (s *Session) AddMessageWithMedia(role, content string, media []string) {
+	msg := map[string]any{
+		"role":      role,
+		"content":   content,
+		"timestamp": time.Now().Format(time.RFC3339),
+	}
+	if len(media) > 0 {
+		msg["media"] = media
+	}
+	s.Messages = append(s.Messages, msg)
+	s.UpdatedAt = time.Now()
+}
+
 // GetHistory 获取历史消息 (最近 N 条)
 func (s *Session) GetHistory(maxMessages int) []map[string]any {
 	if len(s.Messages) <= maxMessages {
@@ -161,14 +175,14 @@ func (m *Manager) SessionCount() int {
 }
 
 // ListSessions 列出所有会话文件 (对标 session/manager.py:list_sessions)
-func (m *Manager) ListSessions() []map[string]string {
+func (m *Manager) ListSessions() []map[string]any {
 	dir := filepath.Join(m.workspace, "sessions")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 
-	var sessions []map[string]string
+	var sessions []map[string]any
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
@@ -180,10 +194,36 @@ func (m *Manager) ListSessions() []map[string]string {
 		if info != nil {
 			updatedAt = info.ModTime().Format(time.RFC3339)
 		}
-		sessions = append(sessions, map[string]string{
+
+		item := map[string]any{
 			"key":        key,
 			"updated_at": updatedAt,
-		})
+		}
+
+		// Extract chat_id from session key: {agentId}:{channel}:{chatId}
+		if parts := strings.SplitN(key, ":", 3); len(parts) == 3 {
+			item["chat_id"] = parts[2]
+		}
+
+		// 读取 JSONL 提取消息数和第一条用户消息作为预览
+		s := m.loadFromDisk(key)
+		if s != nil {
+			item["messages"] = len(s.Messages)
+			for _, msg := range s.Messages {
+				if role, _ := msg["role"].(string); role == "user" {
+					if content, _ := msg["content"].(string); content != "" {
+						preview := content
+						if len(preview) > 100 {
+							preview = preview[:100] + "..."
+						}
+						item["preview"] = preview
+						break
+					}
+				}
+			}
+		}
+
+		sessions = append(sessions, item)
 	}
 	return sessions
 }

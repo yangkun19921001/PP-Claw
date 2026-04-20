@@ -27,7 +27,7 @@ func (s *APIServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 	mgr := s.getSessionManager()
 	sessions := mgr.ListSessions()
 	if sessions == nil {
-		sessions = []map[string]string{}
+		sessions = []map[string]any{}
 	}
 	writeOK(w, sessions)
 }
