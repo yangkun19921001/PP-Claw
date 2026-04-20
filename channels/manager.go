@@ -259,8 +259,8 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 	for {
 		select {
 		case msg := <-sub:
-			// 跳过 CLI 消息（由 CLI handler 处理）
-			if msg.Channel == "cli" {
+			// 跳过 CLI / UI 消息（由各自 handler 处理）
+			if msg.Channel == "cli" || msg.Channel == "ui" {
 				continue
 			}
 
