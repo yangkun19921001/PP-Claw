@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 
-	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	larkdocx "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
 	larksearch "github.com/larksuite/oapi-sdk-go/v3/service/search/v2"
@@ -17,21 +16,28 @@ import (
 
 func init() {
 	RegisterFeishuToolFactory(func(cfg *FeishuToolsConfig) Tool {
-		client := lark.NewClient(cfg.AppID, cfg.AppSecret)
+		clients := buildClients(cfg)
 
 		tool := &FeishuWikiTool{
-			Client:           client,
+			feishuMultiClient: feishuMultiClient{
+				clients:          clients,
+				defaultAccountID: cfg.DefaultAccountID,
+			},
 			OAuthRedirectURL: cfg.OAuthRedirectURL,
 			SearchMaxResults: cfg.SearchMaxResults,
 		}
 
-		// 配置了 OAuth 才启用搜索的用户授权流程
+		// 为每个账号创建 TokenManager（配置了 OAuth 才启用）
 		if cfg.OAuthRedirectURL != "" {
-			tool.TokenManager = NewFeishuTokenManager(&FeishuTokenManagerConfig{
-				Client: client,
-				AppID:  cfg.AppID,
-				Logger: cfg.Logger,
-			})
+			tool.tokenManagers = make(map[string]*FeishuTokenManager, len(cfg.Accounts))
+			for id, acct := range cfg.Accounts {
+				tool.tokenManagers[id] = NewFeishuTokenManager(&FeishuTokenManagerConfig{
+					Client:    clients[id],
+					AppID:     acct.AppID,
+					AccountID: id,
+					Logger:    cfg.Logger,
+				})
+			}
 		}
 
 		return tool
@@ -40,10 +46,37 @@ func init() {
 
 // FeishuWikiTool 飞书知识库工具
 type FeishuWikiTool struct {
-	Client           *lark.Client
-	TokenManager     *FeishuTokenManager
+	feishuMultiClient
+	tokenManagers    map[string]*FeishuTokenManager
 	OAuthRedirectURL string
 	SearchMaxResults int
+}
+
+// getTokenManager 返回当前账号的 TokenManager
+func (t *FeishuWikiTool) getTokenManager() *FeishuTokenManager {
+	id := t.accountID
+	if id == "" {
+		id = t.defaultAccountID
+	}
+	if tm, ok := t.tokenManagers[id]; ok {
+		return tm
+	}
+	if tm, ok := t.tokenManagers[t.defaultAccountID]; ok {
+		return tm
+	}
+	return nil
+}
+
+// GetDefaultTokenManager 返回默认账号的 TokenManager（供 OAuth callback 使用）
+func (t *FeishuWikiTool) GetDefaultTokenManager() *FeishuTokenManager {
+	if tm, ok := t.tokenManagers[t.defaultAccountID]; ok {
+		return tm
+	}
+	// fallback: 返回任意一个
+	for _, tm := range t.tokenManagers {
+		return tm
+	}
+	return nil
 }
 
 func (t *FeishuWikiTool) Name() string { return "feishu_wiki" }
@@ -113,7 +146,7 @@ func (t *FeishuWikiTool) listSpaces(ctx context.Context, params map[string]any) 
 		builder.PageToken(pt)
 	}
 
-	resp, err := t.Client.Wiki.Space.List(ctx, builder.Build())
+	resp, err := t.getClient().Wiki.Space.List(ctx, builder.Build())
 	if err != nil {
 		return "", fmt.Errorf("list spaces failed: %w", err)
 	}
@@ -172,7 +205,7 @@ func (t *FeishuWikiTool) listNodes(ctx context.Context, params map[string]any) (
 		builder.PageToken(pt)
 	}
 
-	resp, err := t.Client.Wiki.SpaceNode.List(ctx, builder.Build())
+	resp, err := t.getClient().Wiki.SpaceNode.List(ctx, builder.Build())
 	if err != nil {
 		return "", fmt.Errorf("list nodes failed: %w", err)
 	}
@@ -231,7 +264,7 @@ func (t *FeishuWikiTool) readNode(ctx context.Context, params map[string]any) (s
 
 	// 获取节点信息
 	nodeReq := larkwiki.NewGetNodeSpaceReqBuilder().Token(nodeToken).Build()
-	nodeResp, err := t.Client.Wiki.Space.GetNode(ctx, nodeReq)
+	nodeResp, err := t.getClient().Wiki.Space.GetNode(ctx, nodeReq)
 	if err != nil {
 		return "", fmt.Errorf("get node failed: %w", err)
 	}
@@ -275,15 +308,16 @@ func (t *FeishuWikiTool) search(ctx context.Context, params map[string]any) (str
 	}
 
 	// 检查 token manager
-	if t.TokenManager == nil {
+	tm := t.getTokenManager()
+	if tm == nil {
 		return "Search is not available: OAuth not configured. Please set feishu.oauth_port and feishu.oauth_redirect_url in config.", nil
 	}
 
 	// 获取 user token
-	userToken, err := t.TokenManager.GetUserToken(ctx)
+	userToken, err := tm.GetUserToken(ctx)
 	if err != nil {
 		// 没有 token，返回授权链接
-		authURL := t.TokenManager.GetAuthURL(t.OAuthRedirectURL)
+		authURL := tm.GetAuthURL(t.OAuthRedirectURL)
 		return fmt.Sprintf("需要飞书用户授权才能使用搜索功能。请点击以下链接完成授权，授权后重新搜索即可：\n\n%s", authURL), nil
 	}
 
@@ -307,7 +341,7 @@ func (t *FeishuWikiTool) search(ctx context.Context, params map[string]any) (str
 		Body(searchBody).
 		Build()
 
-	resp, err := t.Client.Search.DocWiki.Search(ctx, searchReq,
+	resp, err := t.getClient().Search.DocWiki.Search(ctx, searchReq,
 		larkcore.WithUserAccessToken(userToken))
 	if err != nil {
 		return "", fmt.Errorf("search failed: %w", err)
@@ -315,7 +349,7 @@ func (t *FeishuWikiTool) search(ctx context.Context, params map[string]any) (str
 	if !resp.Success() {
 		// token 可能已失效
 		if resp.Code == 99991668 || resp.Code == 99991672 || resp.Code == 99991679 {
-			authURL := t.TokenManager.GetAuthURL(t.OAuthRedirectURL)
+			authURL := tm.GetAuthURL(t.OAuthRedirectURL)
 			return fmt.Sprintf("用户授权已失效或权限不足，请重新授权：\n\n%s", authURL), nil
 		}
 		return "", fmt.Errorf("search failed: code=%d msg=%s", resp.Code, resp.Msg)
@@ -390,7 +424,7 @@ func (t *FeishuWikiTool) search(ctx context.Context, params map[string]any) (str
 // readDocContent 读取文档原始内容
 func (t *FeishuWikiTool) readDocContent(ctx context.Context, docID string) (string, error) {
 	docReq := larkdocx.NewRawContentDocumentReqBuilder().DocumentId(docID).Lang(0).Build()
-	docResp, err := t.Client.Docx.Document.RawContent(ctx, docReq)
+	docResp, err := t.getClient().Docx.Document.RawContent(ctx, docReq)
 	if err != nil {
 		return "", fmt.Errorf("read document failed: %w", err)
 	}

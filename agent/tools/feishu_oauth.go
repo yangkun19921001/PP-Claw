@@ -38,9 +38,10 @@ type FeishuTokenManager struct {
 
 // FeishuTokenManagerConfig token manager 配置
 type FeishuTokenManagerConfig struct {
-	Client *lark.Client
-	AppID  string
-	Logger *zap.Logger
+	Client    *lark.Client
+	AppID     string
+	AccountID string // 账号标识，用于隔离 token 文件
+	Logger    *zap.Logger
 }
 
 // NewFeishuTokenManager 创建 token manager
@@ -51,7 +52,12 @@ func NewFeishuTokenManager(cfg *FeishuTokenManagerConfig) *FeishuTokenManager {
 	}
 
 	home, _ := os.UserHomeDir()
-	tokenFile := filepath.Join(home, ".pp-claw", "feishu_token.json")
+	// 按账号隔离 token 文件，兼容旧版单文件
+	tokenFileName := "feishu_token.json"
+	if cfg.AccountID != "" {
+		tokenFileName = fmt.Sprintf("feishu_token_%s.json", cfg.AccountID)
+	}
+	tokenFile := filepath.Join(home, ".pp-claw", tokenFileName)
 
 	mgr := &FeishuTokenManager{
 		client:    cfg.Client,

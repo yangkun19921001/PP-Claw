@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 
-	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkaily "github.com/larksuite/oapi-sdk-go/v3/service/aily/v1"
 )
 
@@ -18,7 +17,10 @@ func init() {
 			return nil
 		}
 		return &FeishuKnowledgeTool{
-			Client:          lark.NewClient(cfg.AppID, cfg.AppSecret),
+			feishuMultiClient: feishuMultiClient{
+				clients:          buildClients(cfg),
+				defaultAccountID: cfg.DefaultAccountID,
+			},
 			AilyAppID:       cfg.AilyAppID,
 			DataAssetIDs:    cfg.AilyDataAssetIDs,
 			DataAssetTagIDs: cfg.AilyDataAssetTagIDs,
@@ -28,7 +30,7 @@ func init() {
 
 // FeishuKnowledgeTool 飞书 Aily 数据知识问答工具
 type FeishuKnowledgeTool struct {
-	Client          *lark.Client
+	feishuMultiClient
 	AilyAppID       string   // 飞书智能伙伴 App ID
 	DataAssetIDs    []string // 默认数据知识 ID 列表
 	DataAssetTagIDs []string // 默认数据知识分类 ID 列表
@@ -97,7 +99,7 @@ func (t *FeishuKnowledgeTool) Execute(ctx context.Context, params map[string]any
 		Body(bodyBuilder.Build()).
 		Build()
 
-	resp, err := t.Client.Aily.V1.AppKnowledge.Ask(ctx, req)
+	resp, err := t.getClient().Aily.V1.AppKnowledge.Ask(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("knowledge ask failed: %w", err)
 	}

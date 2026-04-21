@@ -7,19 +7,23 @@ import (
 	"encoding/json"
 	"fmt"
 
-	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkdocx "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
 )
 
 func init() {
 	RegisterFeishuToolFactory(func(cfg *FeishuToolsConfig) Tool {
-		return &FeishuDocsTool{Client: lark.NewClient(cfg.AppID, cfg.AppSecret)}
+		return &FeishuDocsTool{
+			feishuMultiClient: feishuMultiClient{
+				clients:          buildClients(cfg),
+				defaultAccountID: cfg.DefaultAccountID,
+			},
+		}
 	})
 }
 
 // FeishuDocsTool 飞书文档工具
 type FeishuDocsTool struct {
-	Client *lark.Client
+	feishuMultiClient
 }
 
 func (t *FeishuDocsTool) Name() string { return "feishu_docs" }
@@ -76,7 +80,7 @@ func (t *FeishuDocsTool) readDocument(ctx context.Context, params map[string]any
 	}
 
 	req := larkdocx.NewRawContentDocumentReqBuilder().DocumentId(docID).Lang(0).Build()
-	resp, err := t.Client.Docx.Document.RawContent(ctx, req)
+	resp, err := t.getClient().Docx.Document.RawContent(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("read document failed: %w", err)
 	}
@@ -103,7 +107,7 @@ func (t *FeishuDocsTool) getDocumentInfo(ctx context.Context, params map[string]
 	}
 
 	req := larkdocx.NewGetDocumentReqBuilder().DocumentId(docID).Build()
-	resp, err := t.Client.Docx.Document.Get(ctx, req)
+	resp, err := t.getClient().Docx.Document.Get(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("get document info failed: %w", err)
 	}
@@ -134,7 +138,7 @@ func (t *FeishuDocsTool) listBlocks(ctx context.Context, params map[string]any) 
 	}
 
 	req := larkdocx.NewListDocumentBlockReqBuilder().DocumentId(docID).PageSize(500).Build()
-	resp, err := t.Client.Docx.DocumentBlock.List(ctx, req)
+	resp, err := t.getClient().Docx.DocumentBlock.List(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("list blocks failed: %w", err)
 	}

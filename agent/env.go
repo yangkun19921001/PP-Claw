@@ -154,27 +154,53 @@ func (env *AgentEnv) RegisterDefaultTools(cfg *config.Config, msgBus *bus.Messag
 		env.Tools.Register(&tools.CronTool{CronService: cronService})
 	}
 
-	if cfg.Channels.Feishu.Enabled && (cfg.Channels.Feishu.WikiEnabled || cfg.Channels.Feishu.DocsEnabled || cfg.Channels.Feishu.AilyAppID != "") {
-		searchMax := cfg.Channels.Feishu.SearchMaxResults
-		if searchMax <= 0 {
-			searchMax = 3
+	if cfg.Channels.Feishu.Enabled {
+		// 使用 ResolveAccounts 合并多账号配置
+		feishuAccounts := cfg.Channels.Feishu.ResolveAccounts()
+		defaultAccID := cfg.Channels.Feishu.DefaultAccountID()
+
+		// 检查是否有任意账号启用了飞书工具
+		anyEnabled := false
+		for _, acct := range feishuAccounts {
+			if acct.WikiEnabled || acct.DocsEnabled || acct.AilyAppID != "" {
+				anyEnabled = true
+				break
+			}
 		}
-		oauthRedirect := cfg.Channels.Feishu.OAuthRedirectURL
-		if oauthRedirect == "" && cfg.Gateway.Port > 0 {
-			oauthRedirect = fmt.Sprintf("http://localhost:%d/feishu/oauth/callback", cfg.Gateway.Port)
-		}
-		feishuTools := tools.CreateFeishuTools(&tools.FeishuToolsConfig{
-			AppID:               cfg.Channels.Feishu.AppID,
-			AppSecret:           cfg.Channels.Feishu.AppSecret,
-			OAuthRedirectURL:    oauthRedirect,
-			SearchMaxResults:    searchMax,
-			Logger:              logger,
-			AilyAppID:           cfg.Channels.Feishu.AilyAppID,
-			AilyDataAssetIDs:    cfg.Channels.Feishu.AilyDataAssetIDs,
-			AilyDataAssetTagIDs: cfg.Channels.Feishu.AilyDataAssetTagIDs,
-		})
-		for _, ft := range feishuTools {
-			env.Tools.Register(ft)
+
+		if anyEnabled {
+			defaultAcct := feishuAccounts[defaultAccID]
+			searchMax := defaultAcct.SearchMaxResults
+			if searchMax <= 0 {
+				searchMax = 3
+			}
+			oauthRedirect := defaultAcct.OAuthRedirectURL
+			if oauthRedirect == "" && cfg.Gateway.Port > 0 {
+				oauthRedirect = fmt.Sprintf("http://localhost:%d/feishu/oauth/callback", cfg.Gateway.Port)
+			}
+
+			// 构建多账号凭据
+			toolAccounts := make(map[string]tools.FeishuAccountCredentials, len(feishuAccounts))
+			for id, acct := range feishuAccounts {
+				toolAccounts[id] = tools.FeishuAccountCredentials{
+					AppID:     acct.AppID,
+					AppSecret: acct.AppSecret,
+				}
+			}
+
+			feishuTools := tools.CreateFeishuTools(&tools.FeishuToolsConfig{
+				Accounts:            toolAccounts,
+				DefaultAccountID:    defaultAccID,
+				OAuthRedirectURL:    oauthRedirect,
+				SearchMaxResults:    searchMax,
+				Logger:              logger,
+				AilyAppID:           defaultAcct.AilyAppID,
+				AilyDataAssetIDs:    defaultAcct.AilyDataAssetIDs,
+				AilyDataAssetTagIDs: defaultAcct.AilyDataAssetTagIDs,
+			})
+			for _, ft := range feishuTools {
+				env.Tools.Register(ft)
+			}
 		}
 	}
 }
@@ -424,8 +450,10 @@ func (p *AgentEnvPool) GetFeishuOAuthHandler() any {
 
 	for _, env := range p.envs {
 		if t := env.Tools.Get("feishu_wiki"); t != nil {
-			if wt, ok := t.(*tools.FeishuWikiTool); ok && wt.TokenManager != nil {
-				return wt.TokenManager
+			if wt, ok := t.(*tools.FeishuWikiTool); ok {
+				if tm := wt.GetDefaultTokenManager(); tm != nil {
+					return tm
+				}
 			}
 		}
 	}
